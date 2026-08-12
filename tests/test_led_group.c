@@ -114,10 +114,48 @@ static void test_brightness_does_not_compound_on_repeated_calls(void)
     assert(group.scaled_r == 200 && group.scaled_g == 100 && group.scaled_b == 50);
 }
 
+static void test_breathing_follows_lut_and_wraps_at_period_boundary(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 1);
+    /* scaled_r/g/b = 100 so the effective color equals the LUT factor
+     * directly (100 * factor / 100 == factor), which keeps the assertions
+     * below readable without hand-computing every multiply. */
+    led_group_set_color(&group, 100, 100, 100);
+    led_group_set_period_ms(&group, 200); /* 200 LUT entries -> 1 entry per ms */
+    led_group_set_state(&group, LED_GROUP_BREATHING, 1000);
+    recorder_reset(&rec);
+
+    led_group_update(&group, 1000); /* phase 0 -> lut[0] == 4 */
+    assert(rec.count == 1);
+    assert(rec.calls[0].r == 4 && rec.calls[0].g == 4 && rec.calls[0].b == 4);
+
+    led_group_update(&group, 1100); /* phase 100 -> lut[100] == 99 */
+    assert(rec.count == 2);
+    assert(rec.calls[1].r == 99);
+
+    led_group_update(&group, 1199); /* phase 199 -> lut[199] == 5 */
+    assert(rec.count == 3);
+    assert(rec.calls[2].r == 5);
+
+    led_group_update(&group, 1200); /* phase wraps to 0 -> lut[0] == 4 again */
+    assert(rec.count == 4);
+    assert(rec.calls[3].r == 4);
+
+    led_group_update(&group, 1200); /* same phase, same color -> no new write */
+    assert(rec.count == 4);
+}
+
 int main(void)
 {
     test_off_writes_black_once_via_dirty_flag();
     test_on_writes_scaled_color_and_fans_out_to_all_indices();
     test_brightness_does_not_compound_on_repeated_calls();
+    test_breathing_follows_lut_and_wraps_at_period_boundary();
     return 0;
 }
