@@ -1,0 +1,3 @@
+add_executable(led_group_tests test_led_group.c)
+target_link_libraries(led_group_tests PRIVATE led_group)
+add_test(NAME led_group_tests COMMAND led_group_tests)
