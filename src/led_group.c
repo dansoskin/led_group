@@ -44,8 +44,8 @@ void led_group_set_color(led_group_t *group, uint8_t r, uint8_t g, uint8_t b)
 
 void led_group_set_brightness_pct(led_group_t *group, uint8_t pct)
 {
-    (void)group;
-    (void)pct;
+    group->brightness_pct = pct > 100 ? 100 : pct;
+    led_group_recompute_scaled(group);
 }
 
 void led_group_set_period_ms(led_group_t *group, uint32_t period_ms)

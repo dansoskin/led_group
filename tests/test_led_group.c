@@ -86,9 +86,38 @@ static void test_on_writes_scaled_color_and_fans_out_to_all_indices(void)
     assert(rec.calls[3].r == 0 && rec.calls[3].g == 0 && rec.calls[3].b == 0);
 }
 
+static void test_brightness_does_not_compound_on_repeated_calls(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 1);
+    led_group_set_color(&group, 200, 100, 50);
+
+    led_group_set_brightness_pct(&group, 50);
+    assert(group.scaled_r == 100 && group.scaled_g == 50 && group.scaled_b == 25);
+
+    /* Calling the same brightness again must NOT re-scale the already-scaled
+     * value (100 * 50 / 100 = 50, the historical bug) - it must recompute
+     * from the untouched base color every time. */
+    led_group_set_brightness_pct(&group, 50);
+    assert(group.scaled_r == 100 && group.scaled_g == 50 && group.scaled_b == 25);
+
+    led_group_set_brightness_pct(&group, 25);
+    assert(group.scaled_r == 50 && group.scaled_g == 25 && group.scaled_b == 12);
+
+    /* Values above 100 clamp to 100 rather than wrapping/overflowing. */
+    led_group_set_brightness_pct(&group, 255);
+    assert(group.scaled_r == 200 && group.scaled_g == 100 && group.scaled_b == 50);
+}
+
 int main(void)
 {
     test_off_writes_black_once_via_dirty_flag();
     test_on_writes_scaled_color_and_fans_out_to_all_indices();
+    test_brightness_does_not_compound_on_repeated_calls();
     return 0;
 }
