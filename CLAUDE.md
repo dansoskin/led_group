@@ -30,16 +30,22 @@ so it can be reused as a git submodule across multiple embedded projects
 - `examples/basic_usage.c` is a runnable, driver-agnostic demo of how a
   consuming project wires this library up (named groups, project color
   macros, a `write_pixel` callback standing in for a real driver) — mirrors
-  the shape of `leds.h`/`leds.cpp` in the reference projects.
-- Known environmental issue on the machine this was built on: a CrowdStrike
-  Falcon Sensor false positive blocks/deletes execution of any freshly-
-  compiled binary that links `src/led_group.c` (compilation is unaffected,
-  only running the resulting `.exe` is blocked). Every task's test/example
-  behavior was therefore verified by rigorous manual trace against the code
-  rather than a live `ctest` run, cross-checked by an independent reviewer
-  redoing each trace from scratch. Re-run `ctest --test-dir build
-  --output-on-failure` for real once that's resolved (on this machine or a
-  different one) to get a live pass/fail confirmation.
+  the shape of `leds.h`/`leds.cpp` in the reference projects. Builds and
+  runs on the host via CMake, no hardware/framework needed.
+- `examples/fastled_arduino/fastled_arduino.ino` is the same wiring pattern
+  targeting real hardware: FastLED as the driver, `setup()`/`loop()` ticking
+  every 10ms like the reference projects' `all_leds_loop()`. Needs the
+  FastLED library installed separately (Arduino Library Manager or
+  `lib_deps = FastLED`); not part of the plain-CMake build (intentionally
+  not wired into `examples/CMakeLists.txt`, since Arduino.h/FastLED.h aren't
+  available there).
+- The CrowdStrike Falcon Sensor false positive that was blocking execution
+  of freshly-compiled binaries during initial implementation (see git
+  history around 2026-08-12 if this resurfaces) cleared on its own within
+  that same session — `ctest` ran live and passed 100% before the final
+  merge, confirming every manual trace done while it was blocked was
+  accurate. If a future session hits vanishing/`Permission denied` `.exe`s
+  again, that's the same known issue, not a new code bug.
 - Two minor, explicitly non-blocking follow-ups noted by the final review
   (optional, not scheduled): (1) `led_group_effective_color()` has some
   duplicated guard/phase-check logic across the BLINK/BLINK_CODE/BREATHING
@@ -59,8 +65,7 @@ those repos from here; they're separate projects.
 
 ## Not yet decided / not done
 - Remote is configured (`https://github.com/dansoskin/led_group.git`) and
-  `master` is pushed. This implementation was done on a feature branch in an
-  isolated worktree — merge it back via `finishing-a-development-branch`.
+  `master` is pushed and up to date.
 - No LICENSE or README.
 - Wiring this library back into biostaq_dispenser/cannadorf_v2 (adding it as
   a submodule, rewriting `leds.cpp`/`leds.h` to use it) is explicitly out of
