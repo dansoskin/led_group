@@ -187,6 +187,40 @@ static void test_blink_phase_is_independent_per_group(void)
     assert(rec.calls[3].index == 1 && rec.calls[3].r == 0);   /* B off */
 }
 
+static void test_blink_code_bursts_pauses_and_repeats(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 1);
+    led_group_set_color(&group, 80, 80, 80);
+    led_group_set_period_ms(&group, 100);
+    led_group_set_blink_code(&group, 3, 400);
+    led_group_set_state(&group, LED_GROUP_BLINK_CODE, 0);
+    recorder_reset(&rec);
+
+    led_group_update(&group, 0);   /* t=0: burst, phase 0 < 50 -> on */
+    assert(rec.count == 1 && rec.calls[0].r == 80);
+
+    led_group_update(&group, 60);  /* t=60: burst, phase 60 -> off */
+    assert(rec.count == 2 && rec.calls[1].r == 0);
+
+    led_group_update(&group, 110); /* t=110: burst, phase 10 -> on (2nd blink) */
+    assert(rec.count == 3 && rec.calls[2].r == 80);
+
+    led_group_update(&group, 310); /* t=310: past burst_ms=300 -> pause, off */
+    assert(rec.count == 4 && rec.calls[3].r == 0);
+
+    led_group_update(&group, 650); /* t=650: still in pause -> off, no new write */
+    assert(rec.count == 4);
+
+    led_group_update(&group, 700); /* t=700 wraps to t=0 of next cycle -> on again */
+    assert(rec.count == 5 && rec.calls[4].r == 80);
+}
+
 int main(void)
 {
     test_off_writes_black_once_via_dirty_flag();
@@ -194,5 +228,6 @@ int main(void)
     test_brightness_does_not_compound_on_repeated_calls();
     test_breathing_follows_lut_and_wraps_at_period_boundary();
     test_blink_phase_is_independent_per_group();
+    test_blink_code_bursts_pauses_and_repeats();
     return 0;
 }

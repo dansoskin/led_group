@@ -69,9 +69,8 @@ void led_group_set_period_ms(led_group_t *group, uint32_t period_ms)
 
 void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_ms)
 {
-    (void)group;
-    (void)count;
-    (void)pause_ms;
+    group->blink_code_count = count;
+    group->blink_code_pause_ms = pause_ms;
 }
 
 void led_group_set_state(led_group_t *group, led_group_state_t state, uint32_t now_ms)
@@ -116,6 +115,38 @@ static void led_group_effective_color(const led_group_t *group, uint32_t now_ms,
             *out_r = group->scaled_r;
             *out_g = group->scaled_g;
             *out_b = group->scaled_b;
+        } else {
+            *out_r = 0;
+            *out_g = 0;
+            *out_b = 0;
+        }
+        break;
+    }
+
+    case LED_GROUP_BLINK_CODE: {
+        uint32_t period_ms = group->period_ms != 0 ? group->period_ms : 1;
+        uint32_t burst_ms = (uint32_t)group->blink_code_count * period_ms;
+        uint32_t cycle_ms = burst_ms + group->blink_code_pause_ms;
+        /* Both blink_code_count and blink_code_pause_ms default to 0, so a
+         * caller that forgets to call set_blink_code() before entering this
+         * state would otherwise hit cycle_ms == 0 here - guard the same way
+         * period_ms is guarded above. */
+        if (cycle_ms == 0) {
+            cycle_ms = 1;
+        }
+        uint32_t t = (now_ms - group->state_entered_ms) % cycle_ms;
+        if (t < burst_ms) {
+            uint32_t phase = t % period_ms;
+            bool on = phase < period_ms / 2;
+            if (on) {
+                *out_r = group->scaled_r;
+                *out_g = group->scaled_g;
+                *out_b = group->scaled_b;
+            } else {
+                *out_r = 0;
+                *out_g = 0;
+                *out_b = 0;
+            }
         } else {
             *out_r = 0;
             *out_g = 0;
