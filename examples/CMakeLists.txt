@@ -1,0 +1,2 @@
+add_executable(led_group_example basic_usage.c)
+target_link_libraries(led_group_example PRIVATE led_group)

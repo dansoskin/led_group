@@ -1,0 +1,15 @@
+{
+  "name": "led_group",
+  "version": "0.1.0",
+  "description": "Dependency-free C library for independently controlling named groups of LEDs on an addressable strip (off/on/breathing/blink/blink-code effects).",
+  "keywords": ["led", "neopixel", "fastled", "effects"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dansoskin/led_group.git"
+  },
+  "frameworks": "*",
+  "platforms": "*",
+  "build": {
+    "flags": ["-Iinclude"]
+  }
+}
