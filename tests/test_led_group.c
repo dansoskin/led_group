@@ -151,11 +151,48 @@ static void test_breathing_follows_lut_and_wraps_at_period_boundary(void)
     assert(rec.count == 4);
 }
 
+static void test_blink_phase_is_independent_per_group(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices_a[] = { 0 };
+    static const uint16_t indices_b[] = { 1 };
+    led_group_t group_a, group_b;
+
+    led_group_init(&group_a, &strip, indices_a, 1);
+    led_group_init(&group_b, &strip, indices_b, 1);
+    led_group_set_color(&group_a, 50, 50, 50);
+    led_group_set_color(&group_b, 50, 50, 50);
+    led_group_set_period_ms(&group_a, 1000);
+    led_group_set_period_ms(&group_b, 1000);
+
+    led_group_set_state(&group_a, LED_GROUP_BLINK, 0);   /* phase starts at 0 */
+    led_group_set_state(&group_b, LED_GROUP_BLINK, 500); /* phase starts 500ms later */
+    recorder_reset(&rec);
+
+    /* now_ms = 600: A's phase is 600 (off half), B's phase is 100 (on half). */
+    led_group_update(&group_a, 600);
+    led_group_update(&group_b, 600);
+    assert(rec.count == 2);
+    assert(rec.calls[0].index == 0 && rec.calls[0].r == 0);   /* A off */
+    assert(rec.calls[1].index == 1 && rec.calls[1].r == 50);  /* B on */
+
+    /* now_ms = 1100: A's phase is 100 (on half), B's phase is 600 (off half)
+     * - the two groups have swapped, proving they're not in lockstep. */
+    led_group_update(&group_a, 1100);
+    led_group_update(&group_b, 1100);
+    assert(rec.count == 4);
+    assert(rec.calls[2].index == 0 && rec.calls[2].r == 50);  /* A on */
+    assert(rec.calls[3].index == 1 && rec.calls[3].r == 0);   /* B off */
+}
+
 int main(void)
 {
     test_off_writes_black_once_via_dirty_flag();
     test_on_writes_scaled_color_and_fans_out_to_all_indices();
     test_brightness_does_not_compound_on_repeated_calls();
     test_breathing_follows_lut_and_wraps_at_period_boundary();
+    test_blink_phase_is_independent_per_group();
     return 0;
 }

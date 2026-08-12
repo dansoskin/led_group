@@ -109,6 +109,21 @@ static void led_group_effective_color(const led_group_t *group, uint32_t now_ms,
         break;
     }
 
+    case LED_GROUP_BLINK: {
+        uint32_t period_ms = group->period_ms != 0 ? group->period_ms : 1;
+        bool on = ((now_ms - group->state_entered_ms) % period_ms) < period_ms / 2;
+        if (on) {
+            *out_r = group->scaled_r;
+            *out_g = group->scaled_g;
+            *out_b = group->scaled_b;
+        } else {
+            *out_r = 0;
+            *out_g = 0;
+            *out_b = 0;
+        }
+        break;
+    }
+
     case LED_GROUP_OFF:
     default:
         *out_r = 0;
