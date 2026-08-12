@@ -36,10 +36,10 @@ void led_group_init(led_group_t *group, const led_strip_t *strip,
 
 void led_group_set_color(led_group_t *group, uint8_t r, uint8_t g, uint8_t b)
 {
-    (void)group;
-    (void)r;
-    (void)g;
-    (void)b;
+    group->base_r = r;
+    group->base_g = g;
+    group->base_b = b;
+    led_group_recompute_scaled(group);
 }
 
 void led_group_set_brightness_pct(led_group_t *group, uint8_t pct)
@@ -63,9 +63,8 @@ void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_
 
 void led_group_set_state(led_group_t *group, led_group_state_t state, uint32_t now_ms)
 {
-    (void)group;
-    (void)state;
-    (void)now_ms;
+    group->state = state;
+    group->state_entered_ms = now_ms;
 }
 
 led_group_state_t led_group_get_state(const led_group_t *group)
@@ -78,6 +77,12 @@ static void led_group_effective_color(const led_group_t *group, uint32_t now_ms,
 {
     (void)now_ms;
     switch (group->state) {
+    case LED_GROUP_ON:
+        *out_r = group->scaled_r;
+        *out_g = group->scaled_g;
+        *out_b = group->scaled_b;
+        break;
+
     case LED_GROUP_OFF:
     default:
         *out_r = 0;
