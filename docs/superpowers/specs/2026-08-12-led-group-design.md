@@ -93,6 +93,7 @@ typedef struct {
 
     uint8_t base_r, base_g, base_b;
     uint8_t brightness_pct;        // 0-100, independent of base_r/g/b
+    uint8_t scaled_r, scaled_g, scaled_b; // = base * brightness_pct / 100, cached
 
     led_group_state_t state;
     uint32_t state_entered_ms;
@@ -106,13 +107,21 @@ typedef struct {
 } led_group_t;
 ```
 
-`base_r/g/b` and `brightness_pct` are stored independently and only
-multiplied together when computing the effective color inside `update()`.
+`base_r/g/b` and `brightness_pct` are stored independently and never
+overwrite each other. Each of `led_group_set_color()` and
+`led_group_set_brightness_pct()` recomputes `scaled_r/g/b = base *
+brightness_pct / 100` once, on the spot, whenever either one changes.
+`update()` then reads `scaled_r/g/b` directly instead of redoing that
+multiply on every tick.
+
 This fixes a real bug in the original `LightenObject::set_brightness_percentage`,
 which re-scaled the *already-scaled* stored color on every call (repeated or
-redundant brightness calls compounded and over-darkened the LED). Keeping
-the two values separate makes `led_group_set_color()` and
-`led_group_set_brightness_pct()` fully independent and order-proof.
+redundant brightness calls compounded and over-darkened the LED, and could
+even divide by a stale zero brightness if approached by trying to "unscale"
+the stored value instead of keeping the base separately). Keeping
+`base_r/g/b` as the untouched source of truth and only ever computing
+*forward* from it (never trying to reverse a multiply already applied)
+avoids both the compounding drift and any divide-by-zero risk.
 
 `indices` is `uint16_t` (unsigned), not the original's signed `int16_t` — a
 pixel index is never negative.
@@ -156,14 +165,14 @@ the caller wants that (e.g. by calling `set_state` on both at the same
 tick).
 
 - **OFF** — effective color is always `(0, 0, 0)`.
-- **ON** — effective color is `base * brightness_pct / 100`, no time
-  dependence.
-- **BREATHING** — same effective base color, scaled by a lookup table:
+- **ON** — effective color is the cached `scaled_r/g/b` as-is, no time
+  dependence and no per-tick multiply.
+- **BREATHING** — `scaled_r/g/b` scaled by a lookup table:
   `phase_ms = (now_ms - state_entered_ms) % period_ms`;
   `idx = phase_ms * LUT_SIZE / period_ms`;
   `factor = breathe_lut[idx]` (0-100, ported from the original `effect1`
   table, converted from float 0.0-1.0 to `uint8_t` 0-100).
-  Final color = `base * brightness_pct / 100 * factor / 100`.
+  Final color = `scaled_r/g/b * factor / 100`.
 - **BLINK** — on for the first half of `period_ms`, off for the second half:
   `on = ((now_ms - state_entered_ms) % period_ms) < period_ms / 2`.
   (Old "slow"/"fast" presets become `led_group_set_period_ms(group, 1000)` /
@@ -184,6 +193,26 @@ No floating point anywhere; `breathe_lut` is a `static const uint8_t[]`.
   memory for the group's lifetime), matching the original design.
 - No floating point — all effect math is integer (LUT lookups, one multiply
   and one divide/modulo per active group per `update()` call).
+- The brightness multiply (`base * brightness_pct / 100`) happens once,
+  inside `led_group_set_color()`/`led_group_set_brightness_pct()`, cached
+  into `scaled_r/g/b` — `update()` never repeats it. The only per-tick math
+  is the LUT phase lookup for `BREATHING`/`BLINK`/`BLINK_CODE`; `ON`/`OFF`
+  do no math at all.
+- The `breathe_lut` table is `uint8_t` (0-100), not the original's `float`
+  (0.0-1.0), specifically because the library must run unmodified across
+  different MCUs, and float performance is not portable the way integer
+  performance is: on FPU-equipped parts (ESP32 Xtensa, STM32F4/F7/H7 "F"
+  variants) a float multiply is about as cheap as an integer one, but on
+  FPU-less parts (STM32F0/G0, Cortex-M0/M0+) float arithmetic is emulated
+  in software and can be an order of magnitude slower. The `/ 100` this
+  introduces isn't a real cost either: dividing by a compile-time constant
+  is folded by GCC/Clang into a multiply-and-shift at normal optimization
+  levels (`-Os`/`-O2`), on every target this library targets — so it is
+  not an actual division instruction at runtime, unlike the genuine
+  runtime divisions by `period_ms` (a variable) already required for
+  `BREATHING`/`BLINK`/`BLINK_CODE` phase math. Net effect: the integer LUT
+  is at worst equal to, and on FPU-less targets substantially faster than,
+  keeping the table as floats.
 - `update()` is O(1) per group plus O(k) only when the color has changed,
   where k = `indices_count` (bounded by how many indices that one logical
   LED group has, typically 1-2).
