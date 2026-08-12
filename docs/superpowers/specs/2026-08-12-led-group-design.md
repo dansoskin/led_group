@@ -1,11 +1,11 @@
-# led_object: reusable addressable-LED effect library
+# led_group: reusable addressable-LED effect library
 
 ## Origin
 
 Extracted from `LightenObject` in the biostaq_dispenser project
 (`lib/leds/lighten_object.{h,cpp}` + `lib/leds/leds.{h,cpp}`). That code is a
 C++ class tied to `Arduino.h`, `FastLED.h` (`CRGB`), and Arduino `String`, and
-mixes two concerns: (1) a per-object color/brightness + effect state machine,
+mixes two concerns: (1) a per-group color/brightness + effect state machine,
 and (2) project-specific wiring (which physical strip indices belong to which
 named LED, which driver writes them, which colors mean what to this device).
 
@@ -30,7 +30,7 @@ today.
 - Usable from both C and C++ (header wrapped in `extern "C"`), and buildable
   both as a PlatformIO library and via plain CMake (e.g. STM32CubeMX
   projects).
-- Fast: O(1) work per object per `update()` call, integer-only math, and a
+- Fast: O(1) work per group per `update()` call, integer-only math, and a
   dirty-check so a physical pixel write only happens when the computed color
   actually changed.
 
@@ -50,12 +50,12 @@ today.
 ## Package layout
 
 ```
-led_object/
+led_group/
   include/
-    led_object.h
+    led_group.h
   src/
-    led_object.c
-  CMakeLists.txt      # add_library(led_object) for CMake/bare-metal projects
+    led_group.c
+  CMakeLists.txt      # add_library(led_group) for CMake/bare-metal projects
   library.json        # PlatformIO metadata; no framework/platform lock
 ```
 
@@ -68,21 +68,21 @@ it directly.
 
 ```c
 typedef enum {
-    LED_OBJ_OFF,
-    LED_OBJ_ON,
-    LED_OBJ_BREATHING,
-    LED_OBJ_BLINK,
-    LED_OBJ_BLINK_CODE,
-} led_obj_state_t;
+    LED_GROUP_OFF,
+    LED_GROUP_ON,
+    LED_GROUP_BREATHING,
+    LED_GROUP_BLINK,
+    LED_GROUP_BLINK_CODE,
+} led_group_state_t;
 
-typedef void (*led_obj_write_pixel_fn)(uint16_t index, uint8_t r, uint8_t g,
-                                        uint8_t b, void *ctx);
+typedef void (*led_group_write_pixel_fn)(uint16_t index, uint8_t r, uint8_t g,
+                                          uint8_t b, void *ctx);
 
-// One instance per physical strip/driver. Shared by every led_obj_t that
+// One instance per physical strip/driver. Shared by every led_group_t that
 // lives on that strip - the write function is a property of the driver,
-// not of any individual logical LED object.
+// not of any individual logical LED group.
 typedef struct {
-    led_obj_write_pixel_fn write_pixel;
+    led_group_write_pixel_fn write_pixel;
     void *ctx;
 } led_strip_t;
 
@@ -94,7 +94,7 @@ typedef struct {
     uint8_t base_r, base_g, base_b;
     uint8_t brightness_pct;        // 0-100, independent of base_r/g/b
 
-    led_obj_state_t state;
+    led_group_state_t state;
     uint32_t state_entered_ms;
     uint32_t period_ms;            // full on+off cycle (BLINK, BLINK_CODE);
                                     // full breathe cycle (BREATHING)
@@ -103,7 +103,7 @@ typedef struct {
 
     uint8_t last_r, last_g, last_b;
     bool dirty;                    // forces a write on the first update()
-} led_obj_t;
+} led_group_t;
 ```
 
 `base_r/g/b` and `brightness_pct` are stored independently and only
@@ -111,48 +111,49 @@ multiplied together when computing the effective color inside `update()`.
 This fixes a real bug in the original `LightenObject::set_brightness_percentage`,
 which re-scaled the *already-scaled* stored color on every call (repeated or
 redundant brightness calls compounded and over-darkened the LED). Keeping
-the two values separate makes `led_obj_set_color()` and
-`led_obj_set_brightness_pct()` fully independent and order-proof.
+the two values separate makes `led_group_set_color()` and
+`led_group_set_brightness_pct()` fully independent and order-proof.
 
 `indices` is `uint16_t` (unsigned), not the original's signed `int16_t` — a
 pixel index is never negative.
 
 There is no name/identifier field (the original's was only ever used for a
 commented-out debug `printf`); a project that wants to log something already
-has the object's pointer or array index to do so.
+has the group's pointer or array index to do so.
 
-There is no `IDLE` state — `LED_OBJ_OFF` covers "explicitly dark," and
-nothing is written until `led_obj_update()` is called, so there's no need
+There is no `IDLE` state — `LED_GROUP_OFF` covers "explicitly dark," and
+nothing is written until `led_group_update()` is called, so there's no need
 for a separate "untouched" placeholder state.
 
 ## API
 
 ```c
-void led_obj_init(led_obj_t *obj, const led_strip_t *strip,
-                   const uint16_t *indices, uint16_t indices_count);
+void led_group_init(led_group_t *group, const led_strip_t *strip,
+                     const uint16_t *indices, uint16_t indices_count);
 
-void led_obj_set_color(led_obj_t *obj, uint8_t r, uint8_t g, uint8_t b);
-void led_obj_set_brightness_pct(led_obj_t *obj, uint8_t pct);   // clamped to 100
-void led_obj_set_period_ms(led_obj_t *obj, uint32_t period_ms); // BLINK/BLINK_CODE/BREATHING
-void led_obj_set_blink_code(led_obj_t *obj, uint8_t count, uint32_t pause_ms);
+void led_group_set_color(led_group_t *group, uint8_t r, uint8_t g, uint8_t b);
+void led_group_set_brightness_pct(led_group_t *group, uint8_t pct);   // clamped to 100
+void led_group_set_period_ms(led_group_t *group, uint32_t period_ms); // BLINK/BLINK_CODE/BREATHING
+void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_ms);
 
-void led_obj_set_state(led_obj_t *obj, led_obj_state_t state, uint32_t now_ms);
-led_obj_state_t led_obj_get_state(const led_obj_t *obj);
+void led_group_set_state(led_group_t *group, led_group_state_t state, uint32_t now_ms);
+led_group_state_t led_group_get_state(const led_group_t *group);
 
-void led_obj_update(led_obj_t *obj, uint32_t now_ms);
+void led_group_update(led_group_t *group, uint32_t now_ms);
 ```
 
-`led_obj_update()` computes the effective color for `now_ms`, and — only if
-it differs from `last_r/g/b` (or `dirty` is set) — calls
+`led_group_update()` computes the effective color for `now_ms`, and — only
+if it differs from `last_r/g/b` (or `dirty` is set) — calls
 `strip->write_pixel(index, r, g, b, strip->ctx)` once for every entry in
 `indices`, then updates `last_r/g/b` and clears `dirty`.
 
 ## Effect semantics
 
 All timing is relative to `state_entered_ms`, set whenever
-`led_obj_set_state()` is called — so each object's phase is independent, and
-two objects in `LED_OBJ_BREATHING` don't have to be in lockstep unless the
-caller wants that (e.g. by calling `set_state` on both at the same tick).
+`led_group_set_state()` is called — so each group's phase is independent,
+and two groups in `LED_GROUP_BREATHING` don't have to be in lockstep unless
+the caller wants that (e.g. by calling `set_state` on both at the same
+tick).
 
 - **OFF** — effective color is always `(0, 0, 0)`.
 - **ON** — effective color is `base * brightness_pct / 100`, no time
@@ -165,8 +166,8 @@ caller wants that (e.g. by calling `set_state` on both at the same tick).
   Final color = `base * brightness_pct / 100 * factor / 100`.
 - **BLINK** — on for the first half of `period_ms`, off for the second half:
   `on = ((now_ms - state_entered_ms) % period_ms) < period_ms / 2`.
-  (Old "slow"/"fast" presets become `led_obj_set_period_ms(obj, 1000)` /
-  `(obj, 300)`.)
+  (Old "slow"/"fast" presets become `led_group_set_period_ms(group, 1000)` /
+  `(group, 300)`.)
 - **BLINK_CODE** — burst of `blink_code_count` blinks at `period_ms`,
   followed by `blink_code_pause_ms` of dark, then repeats:
   `cycle_ms = blink_code_count * period_ms + blink_code_pause_ms`;
@@ -178,16 +179,16 @@ No floating point anywhere; `breathe_lut` is a `static const uint8_t[]`.
 
 ## Performance characteristics
 
-- No dynamic allocation anywhere in the library — `led_obj_init()` just
+- No dynamic allocation anywhere in the library — `led_group_init()` just
   stores the caller-supplied `indices` pointer/count (caller owns that
-  memory for the object's lifetime), matching the original design.
+  memory for the group's lifetime), matching the original design.
 - No floating point — all effect math is integer (LUT lookups, one multiply
-  and one divide/modulo per active object per `update()` call).
-- `update()` is O(1) per object plus O(k) only when the color has changed,
+  and one divide/modulo per active group per `update()` call).
+- `update()` is O(1) per group plus O(k) only when the color has changed,
   where k = `indices_count` (bounded by how many indices that one logical
   LED group has, typically 1-2).
 - This is more than sufficient for typical embedded LED-indicator use
-  (a handful of objects, update loop in the tens-to-low-hundreds of Hz) —
+  (a handful of groups, update loop in the tens-to-low-hundreds of Hz) —
   no further optimization (e.g. power-of-two period constraints to avoid
   division) is needed for that profile. If a future project needs to drive
   hundreds of pixels or a much higher refresh rate, that would call for a
@@ -199,7 +200,7 @@ Exactly what `leds.cpp`/`leds.h` do today in biostaq_dispenser: naming
 actual LED groups (e.g. `top_left_led` = indices `{3, 5}`), project-specific
 color macros (`COLOR_BATTERY_GOOD`, etc.), a `led_strip_t` wired to whichever
 driver is in use (FastLED, Adafruit_NeoPixel, raw SPI/PWM...), and calling
-`led_obj_update()` for every object once per loop tick with
+`led_group_update()` for every group once per loop tick with
 `millis()`/`HAL_GetTick()`.
 
 ## Testing plan
@@ -212,7 +213,7 @@ it by passing explicit `now_ms` values and asserting on the sequence of
 buffer) — no hardware or timing flakiness involved. Cases to cover: OFF/ON
 solid color, brightness/color independence (the bug fix), BREATHING LUT
 phase wraparound, BLINK on/off timing and independent phase across two
-objects sharing a `led_strip_t`, and BLINK_CODE burst+pause+repeat
+groups sharing a `led_strip_t`, and BLINK_CODE burst+pause+repeat
 boundaries.
 
 ## Migration note (biostaq_dispenser)
@@ -220,4 +221,4 @@ boundaries.
 Out of scope for this design/repo. A follow-up task in biostaq_dispenser
 would add this repo as a git submodule under `lib/`, and rewrite
 `leds.cpp`/`leds.h` to wire a `led_strip_t` around `FastLED`/`CRGB` and call
-`led_obj_update()` from `all_leds_loop()`. Not done as part of this spec.
+`led_group_update()` from `all_leds_loop()`. Not done as part of this spec.
