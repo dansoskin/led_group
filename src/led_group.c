@@ -14,6 +14,18 @@ static const uint8_t breathe_lut[BREATHE_LUT_SIZE] = {
     16,16,15,14,13,13,12,11,11,10,10,9,9,8,8,7,7,7,6,6,6,5,5,5
 };
 
+static led_group_ms_fn s_ms_fn = 0;
+
+static uint32_t led_group_now_ms(void)
+{
+    return s_ms_fn ? s_ms_fn() : 0;
+}
+
+void led_group_attach_ms_timer(led_group_ms_fn ms_fn)
+{
+    s_ms_fn = ms_fn;
+}
+
 static void led_group_recompute_scaled(led_group_t *group)
 {
     group->scaled_r = (uint8_t)((uint16_t)group->base_r * group->brightness_pct / 100);
@@ -73,10 +85,10 @@ void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_
     group->blink_code_pause_ms = pause_ms;
 }
 
-void led_group_set_state(led_group_t *group, led_group_state_t state, uint32_t now_ms)
+void led_group_set_state(led_group_t *group, led_group_state_t state)
 {
     group->state = state;
-    group->state_entered_ms = now_ms;
+    group->state_entered_ms = led_group_now_ms();
 }
 
 led_group_state_t led_group_get_state(const led_group_t *group)
@@ -97,9 +109,13 @@ static void led_group_effective_color(const led_group_t *group, uint32_t now_ms,
     case LED_GROUP_BREATHING: {
         /* period_ms is a public setter's input; guard the mod/div below
          * against a caller passing 0, which would otherwise be a
-         * divide-by-zero crash on every embedded target this runs on. */
+         * divide-by-zero crash on every embedded target this runs on.
+         *
+         * Phase derives from the absolute clock, not state entry, so every
+         * group sharing a period breathes in lockstep no matter when each
+         * one entered the state. */
         uint32_t period_ms = group->period_ms != 0 ? group->period_ms : 1;
-        uint32_t phase_ms = (now_ms - group->state_entered_ms) % period_ms;
+        uint32_t phase_ms = now_ms % period_ms;
         uint32_t idx = phase_ms * BREATHE_LUT_SIZE / period_ms;
         uint8_t factor = breathe_lut[idx];
         *out_r = (uint8_t)((uint16_t)group->scaled_r * factor / 100);
@@ -109,8 +125,9 @@ static void led_group_effective_color(const led_group_t *group, uint32_t now_ms,
     }
 
     case LED_GROUP_BLINK: {
+        /* Absolute-clock phase, same as BREATHING - synced across groups. */
         uint32_t period_ms = group->period_ms != 0 ? group->period_ms : 1;
-        bool on = ((now_ms - group->state_entered_ms) % period_ms) < period_ms / 2;
+        bool on = (now_ms % period_ms) < period_ms / 2;
         if (on) {
             *out_r = group->scaled_r;
             *out_g = group->scaled_g;
@@ -134,6 +151,8 @@ static void led_group_effective_color(const led_group_t *group, uint32_t now_ms,
         if (cycle_ms == 0) {
             cycle_ms = 1;
         }
+        /* Unlike BREATHING/BLINK, a blink code anchors to state entry so the
+         * code always plays from its first blink, never from mid-cycle. */
         uint32_t t = (now_ms - group->state_entered_ms) % cycle_ms;
         if (t < burst_ms) {
             uint32_t phase = t % period_ms;
@@ -164,8 +183,9 @@ static void led_group_effective_color(const led_group_t *group, uint32_t now_ms,
     }
 }
 
-void led_group_update(led_group_t *group, uint32_t now_ms)
+void led_group_update(led_group_t *group)
 {
+    uint32_t now_ms = led_group_now_ms();
     uint8_t r, g, b;
     led_group_effective_color(group, now_ms, &r, &g, &b);
 

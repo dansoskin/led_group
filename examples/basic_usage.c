@@ -20,9 +20,20 @@ static void console_write_pixel(uint16_t index, uint8_t r, uint8_t g, uint8_t b,
     printf("pixel[%u] = (%u, %u, %u)\n", index, r, g, b);
 }
 
+/* Stands in for the platform clock (millis()/HAL_GetTick()) that the library
+ * reads through led_group_attach_ms_timer(). */
+static uint32_t fake_now_ms;
+
+static uint32_t fake_clock(void)
+{
+    return fake_now_ms;
+}
+
 int main(void)
 {
     led_strip_t strip = { console_write_pixel, NULL };
+
+    led_group_attach_ms_timer(fake_clock);
 
     static const uint16_t status_indices[] = { 0 };
     static const uint16_t error_indices[] = { 1, 2 };
@@ -37,20 +48,20 @@ int main(void)
     led_group_set_color(&status_led, COLOR_READY);
     led_group_set_brightness_pct(&status_led, 50);
     led_group_set_period_ms(&status_led, 2000);
-    led_group_set_state(&status_led, LED_GROUP_BREATHING, 0);
+    led_group_set_state(&status_led, LED_GROUP_BREATHING);
 
     /* Error LED signals "error code 2": 2 blinks, then a long pause, on repeat. */
     led_group_set_color(&error_led, COLOR_ERROR);
     led_group_set_period_ms(&error_led, 300);
     led_group_set_blink_code(&error_led, 2, 1000);
-    led_group_set_state(&error_led, LED_GROUP_BLINK_CODE, 0);
+    led_group_set_state(&error_led, LED_GROUP_BLINK_CODE);
 
-    /* The library never reads the clock itself - the caller (here, a fixed
-     * fake step standing in for millis()/HAL_GetTick()) drives every tick. */
-    for (uint32_t now_ms = 0; now_ms <= 1000; now_ms += 100) {
-        printf("-- now_ms = %u --\n", now_ms);
-        led_group_update(&status_led, now_ms);
-        led_group_update(&error_led, now_ms);
+    /* The attached timer is the library's only view of time - stepping the
+     * fake clock here drives every effect. */
+    for (fake_now_ms = 0; fake_now_ms <= 1000; fake_now_ms += 100) {
+        printf("-- now_ms = %u --\n", fake_now_ms);
+        led_group_update(&status_led);
+        led_group_update(&error_led);
     }
 
     return 0;
