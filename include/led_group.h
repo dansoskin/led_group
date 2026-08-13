@@ -20,10 +20,6 @@ typedef enum {
 typedef void (*led_group_write_pixel_fn)(uint16_t index, uint8_t r, uint8_t g,
                                           uint8_t b, void *ctx);
 
-/* Millisecond clock source (e.g. Arduino's millis(), STM32's HAL_GetTick()).
- * Attached once, library-wide - every group reads time through it. */
-typedef uint32_t (*led_group_ms_fn)(void);
-
 /* One instance per physical strip/driver. Shared by every led_group_t that
  * lives on that strip - the write function is a property of the driver,
  * not of any individual logical LED group. */
@@ -42,28 +38,30 @@ typedef struct {
     uint8_t scaled_r, scaled_g, scaled_b;
 
     led_group_state_t state;
-    uint32_t state_entered_ms;
-    uint32_t period_ms;
+    uint32_t state_entered_tick;
+    uint32_t period_ticks;
     uint8_t blink_code_count;
-    uint32_t blink_code_pause_ms;
+    uint32_t blink_code_pause_ticks;
 
     uint8_t last_r, last_g, last_b;
     bool dirty;
 } led_group_t;
 
-/* Attach the millisecond clock the library reads time from. Call once at
- * startup, before any led_group_set_state()/led_group_update(). With no
- * timer attached the clock reads as a constant 0 (effects freeze at their
- * phase-0 color rather than crashing). */
-void led_group_attach_ms_timer(led_group_ms_fn ms_fn);
+/* The library has no clock - time is a tick counter shared by every group.
+ * Call led_group_tick() exactly once per rendering pass (e.g. every 10ms),
+ * then led_group_update() for each group in that same pass. All durations
+ * (periods, pauses) are expressed in those ticks, so at a 10ms cadence a
+ * period of 100 ticks is one second. Effect tempo tracks the call cadence:
+ * if the caller's loop stalls, effects stretch rather than skip ahead. */
+void led_group_tick(void);
 
 void led_group_init(led_group_t *group, const led_strip_t *strip,
                      const uint16_t *indices, uint16_t indices_count);
 
 void led_group_set_color(led_group_t *group, uint8_t r, uint8_t g, uint8_t b);
 void led_group_set_brightness_pct(led_group_t *group, uint8_t pct);
-void led_group_set_period_ms(led_group_t *group, uint32_t period_ms);
-void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_ms);
+void led_group_set_period_ticks(led_group_t *group, uint32_t period_ticks);
+void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_ticks);
 
 void led_group_set_state(led_group_t *group, led_group_state_t state);
 led_group_state_t led_group_get_state(const led_group_t *group);

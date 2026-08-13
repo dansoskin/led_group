@@ -20,20 +20,9 @@ static void console_write_pixel(uint16_t index, uint8_t r, uint8_t g, uint8_t b,
     printf("pixel[%u] = (%u, %u, %u)\n", index, r, g, b);
 }
 
-/* Stands in for the platform clock (millis()/HAL_GetTick()) that the library
- * reads through led_group_attach_ms_timer(). */
-static uint32_t fake_now_ms;
-
-static uint32_t fake_clock(void)
-{
-    return fake_now_ms;
-}
-
 int main(void)
 {
     led_strip_t strip = { console_write_pixel, NULL };
-
-    led_group_attach_ms_timer(fake_clock);
 
     static const uint16_t status_indices[] = { 0 };
     static const uint16_t error_indices[] = { 1, 2 };
@@ -44,24 +33,29 @@ int main(void)
     led_group_init(&status_led, &strip, status_indices, 1);
     led_group_init(&error_led, &strip, error_indices, 2);
 
-    /* Status LED breathes green to show the device is idle and ready. */
+    /* Status LED breathes green to show the device is idle and ready.
+     * Durations are in ticks: at a 10ms rendering cadence, 200 ticks = 2s. */
     led_group_set_color(&status_led, COLOR_READY);
     led_group_set_brightness_pct(&status_led, 50);
-    led_group_set_period_ms(&status_led, 2000);
+    led_group_set_period_ticks(&status_led, 200);
     led_group_set_state(&status_led, LED_GROUP_BREATHING);
 
     /* Error LED signals "error code 2": 2 blinks, then a long pause, on repeat. */
     led_group_set_color(&error_led, COLOR_ERROR);
-    led_group_set_period_ms(&error_led, 300);
-    led_group_set_blink_code(&error_led, 2, 1000);
+    led_group_set_period_ticks(&error_led, 30);
+    led_group_set_blink_code(&error_led, 2, 100);
     led_group_set_state(&error_led, LED_GROUP_BLINK_CODE);
 
-    /* The attached timer is the library's only view of time - stepping the
-     * fake clock here drives every effect. */
-    for (fake_now_ms = 0; fake_now_ms <= 1000; fake_now_ms += 100) {
-        printf("-- now_ms = %u --\n", fake_now_ms);
+    /* The library has no clock - led_group_tick(), called once per rendering
+     * pass, is its only view of time. On hardware the loop below would run
+     * every 10ms; here it just runs flat out. */
+    for (uint32_t tick = 0; tick <= 100; tick++) {
+        if (tick % 10 == 0) {
+            printf("-- tick %u --\n", tick);
+        }
         led_group_update(&status_led);
         led_group_update(&error_led);
+        led_group_tick();
     }
 
     return 0;

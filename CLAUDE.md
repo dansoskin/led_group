@@ -18,24 +18,28 @@ so it can be reused as a git submodule across multiple embedded projects
   — the 9-task breakdown that was followed, via `subagent-driven-development`
   with a spec-compliance review and a code-quality review after every task,
   plus a final holistic review across the whole implementation.
-- `include/led_group.h` + `src/led_group.c` implement the full API:
-  `attach_ms_timer`, `init`, `set_color`, `set_brightness_pct`,
-  `set_period_ms`, `set_blink_code`, `set_state`/`get_state`, `update`. All
-  5 states (OFF/ON/BREATHING/BLINK/BLINK_CODE) are real, including the
-  `breathe_lut` integer lookup table and the dirty-flag/write-only-on-change
-  logic. The historical compounding-brightness bug from the original
-  `LightenObject` is fixed and regression-tested.
-- Time comes from a library-global clock attached once via
-  `led_group_attach_ms_timer()` (e.g. Arduino `millis`, STM32 `HAL_GetTick`)
-  — `set_state`/`update` no longer take a `now_ms` parameter (changed
-  2026-08-13 for the cannadorf_v2 integration). With no timer attached the
-  clock reads as 0. BREATHING/BLINK phase off the absolute clock
-  (`now % period`), so all groups with the same period pulse in lockstep
-  regardless of when each entered its state; BLINK_CODE still anchors to
-  state entry so an error code always plays from its first blink.
+- `include/led_group.h` + `src/led_group.c` implement the full API: `tick`,
+  `init`, `set_color`, `set_brightness_pct`, `set_period_ticks`,
+  `set_blink_code`, `set_state`/`get_state`, `update`. All 5 states
+  (OFF/ON/BREATHING/BLINK/BLINK_CODE) are real, including the `breathe_lut`
+  integer lookup table and the dirty-flag/write-only-on-change logic. The
+  historical compounding-brightness bug from the original `LightenObject`
+  is fixed and regression-tested.
+- The library has NO clock (changed 2026-08-13 for the cannadorf_v2
+  integration, replacing a briefly-lived `attach_ms_timer` design): time is
+  a shared tick counter advanced by calling `led_group_tick()` once per
+  rendering pass, and all durations (periods, pauses) are tick counts — at
+  a 10ms cadence, 100 ticks = 1s. Effect tempo therefore tracks the call
+  cadence: a stalled caller loop stretches effects rather than skipping
+  ahead. BREATHING/BLINK phase off the shared counter (`ticks % period`),
+  so all groups with the same period pulse in lockstep regardless of when
+  each entered its state; BLINK_CODE anchors to state entry so an error
+  code always plays from its first blink.
 - `tests/test_led_group.c` has one assert-based test per case in the spec's
-  testing plan plus sync/anchor coverage (7 tests total), run via CTest with
-  a fake attached clock.
+  testing plan plus sync/anchor coverage (7 tests total), run via CTest.
+  The tick counter is process-global and never reset, so tests mirror it
+  through an `advance()` helper and align to phase 0 before asserting exact
+  LUT values.
 - `examples/basic_usage.c` is a runnable, driver-agnostic demo of how a
   consuming project wires this library up (named groups, project color
   macros, a `write_pixel` callback standing in for a real driver) — mirrors

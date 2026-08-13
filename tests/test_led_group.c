@@ -31,13 +31,26 @@ static void recorder_reset(call_recorder_t *rec)
     rec->count = 0;
 }
 
-/* The clock the library reads via led_group_attach_ms_timer() - each test
- * advances time by assigning to test_now_ms before calling update(). */
-static uint32_t test_now_ms;
+/* The library's tick counter is shared across all tests in this process, so
+ * every advance goes through this helper, which mirrors the count. Tests
+ * that assert exact LUT/phase values first align to phase 0 of their period
+ * instead of assuming the counter starts at 0. */
+static uint32_t g_ticks;
 
-static uint32_t fake_ms(void)
+static void advance(uint32_t n)
 {
-    return test_now_ms;
+    g_ticks += n;
+    while (n--) {
+        led_group_tick();
+    }
+}
+
+static void align_to_phase0(uint32_t period_ticks)
+{
+    uint32_t rem = g_ticks % period_ticks;
+    if (rem) {
+        advance(period_ticks - rem);
+    }
 }
 
 static void test_off_writes_black_once_via_dirty_flag(void)
@@ -51,7 +64,6 @@ static void test_off_writes_black_once_via_dirty_flag(void)
     led_group_init(&group, &strip, indices, 1);
     assert(led_group_get_state(&group) == LED_GROUP_OFF);
 
-    test_now_ms = 0;
     led_group_update(&group);
     assert(rec.count == 1);
     assert(rec.calls[0].index == 5);
@@ -59,7 +71,7 @@ static void test_off_writes_black_once_via_dirty_flag(void)
     assert(rec.calls[0].g == 0);
     assert(rec.calls[0].b == 0);
 
-    test_now_ms = 10;
+    advance(1);
     led_group_update(&group);
     assert(rec.count == 1); /* no change -> no second write */
 }
@@ -73,12 +85,10 @@ static void test_on_writes_scaled_color_and_fans_out_to_all_indices(void)
     led_group_t group;
 
     led_group_init(&group, &strip, indices, 2);
-    test_now_ms = 0;
     led_group_update(&group); /* consume the initial OFF dirty write */
     recorder_reset(&rec);
 
     led_group_set_color(&group, 10, 20, 30);
-    test_now_ms = 100;
     led_group_set_state(&group, LED_GROUP_ON);
     assert(led_group_get_state(&group) == LED_GROUP_ON);
 
@@ -89,11 +99,10 @@ static void test_on_writes_scaled_color_and_fans_out_to_all_indices(void)
     assert(rec.calls[1].index == 5);
     assert(rec.calls[1].r == 10 && rec.calls[1].g == 20 && rec.calls[1].b == 30);
 
-    test_now_ms = 200;
+    advance(10);
     led_group_update(&group);
     assert(rec.count == 2); /* unchanged color -> no new writes */
 
-    test_now_ms = 300;
     led_group_set_state(&group, LED_GROUP_OFF);
     led_group_update(&group);
     assert(rec.count == 4);
@@ -142,32 +151,31 @@ static void test_breathing_follows_lut_and_wraps_at_period_boundary(void)
      * directly (100 * factor / 100 == factor), which keeps the assertions
      * below readable without hand-computing every multiply. */
     led_group_set_color(&group, 100, 100, 100);
-    led_group_set_period_ms(&group, 200); /* 200 LUT entries -> 1 entry per ms */
-    test_now_ms = 1000;
+    led_group_set_period_ticks(&group, 200); /* 200 LUT entries -> 1 entry per tick */
+    align_to_phase0(200);
     led_group_set_state(&group, LED_GROUP_BREATHING);
     recorder_reset(&rec);
 
-    /* Phase is now_ms % period_ms (absolute clock, not time-since-entry). */
-    led_group_update(&group); /* 1000 % 200 = 0 -> lut[0] == 4 */
+    led_group_update(&group); /* phase 0 -> lut[0] == 4 */
     assert(rec.count == 1);
     assert(rec.calls[0].r == 4 && rec.calls[0].g == 4 && rec.calls[0].b == 4);
 
-    test_now_ms = 1100;
+    advance(100);
     led_group_update(&group); /* phase 100 -> lut[100] == 99 */
     assert(rec.count == 2);
     assert(rec.calls[1].r == 99);
 
-    test_now_ms = 1199;
+    advance(99);
     led_group_update(&group); /* phase 199 -> lut[199] == 5 */
     assert(rec.count == 3);
     assert(rec.calls[2].r == 5);
 
-    test_now_ms = 1200;
+    advance(1);
     led_group_update(&group); /* phase wraps to 0 -> lut[0] == 4 again */
     assert(rec.count == 4);
     assert(rec.calls[3].r == 4);
 
-    led_group_update(&group); /* same phase, same color -> no new write */
+    led_group_update(&group); /* same tick, same color -> no new write */
     assert(rec.count == 4);
 }
 
@@ -184,27 +192,27 @@ static void test_periodic_effects_are_synced_across_groups(void)
     led_group_init(&group_b, &strip, indices_b, 1);
     led_group_set_color(&group_a, 50, 50, 50);
     led_group_set_color(&group_b, 50, 50, 50);
-    led_group_set_period_ms(&group_a, 1000);
-    led_group_set_period_ms(&group_b, 1000);
+    led_group_set_period_ticks(&group_a, 100);
+    led_group_set_period_ticks(&group_b, 100);
 
-    /* The two groups enter BLINK half a period apart - with absolute-clock
+    /* The two groups enter BLINK half a period apart - with shared-counter
      * phasing that must NOT matter: same period means same phase, always. */
-    test_now_ms = 0;
+    align_to_phase0(100);
     led_group_set_state(&group_a, LED_GROUP_BLINK);
-    test_now_ms = 500;
+    advance(50);
     led_group_set_state(&group_b, LED_GROUP_BLINK);
     recorder_reset(&rec);
 
-    /* now_ms = 600: phase 600 for both -> both in the off half. */
-    test_now_ms = 600;
+    /* phase 60: both in the off half. */
+    advance(10);
     led_group_update(&group_a);
     led_group_update(&group_b);
     assert(rec.count == 2);
     assert(rec.calls[0].index == 0 && rec.calls[0].r == 0);
     assert(rec.calls[1].index == 1 && rec.calls[1].r == 0);
 
-    /* now_ms = 1100: phase 100 for both -> both in the on half, in lockstep. */
-    test_now_ms = 1100;
+    /* phase 10 (wrapped): both in the on half, in lockstep. */
+    advance(50);
     led_group_update(&group_a);
     led_group_update(&group_b);
     assert(rec.count == 4);
@@ -212,13 +220,12 @@ static void test_periodic_effects_are_synced_across_groups(void)
     assert(rec.calls[3].index == 1 && rec.calls[3].r == 50);
 
     /* Same for BREATHING: staggered entry, identical LUT factor every tick. */
-    test_now_ms = 2000;
     led_group_set_state(&group_a, LED_GROUP_BREATHING);
-    test_now_ms = 2300;
+    advance(37);
     led_group_set_state(&group_b, LED_GROUP_BREATHING);
+    advance(13);
     recorder_reset(&rec);
 
-    test_now_ms = 2500; /* phase 500 of 1000 for both -> same LUT entry */
     led_group_update(&group_a);
     led_group_update(&group_b);
     assert(rec.count == 2);
@@ -237,33 +244,32 @@ static void test_blink_code_bursts_pauses_and_repeats(void)
 
     led_group_init(&group, &strip, indices, 1);
     led_group_set_color(&group, 80, 80, 80);
-    led_group_set_period_ms(&group, 100);
-    led_group_set_blink_code(&group, 3, 400);
-    test_now_ms = 0;
+    led_group_set_period_ticks(&group, 10);
+    led_group_set_blink_code(&group, 3, 40); /* burst 30 + pause 40 = 70/cycle */
     led_group_set_state(&group, LED_GROUP_BLINK_CODE);
     recorder_reset(&rec);
 
-    led_group_update(&group); /* t=0: burst, phase 0 < 50 -> on */
+    led_group_update(&group); /* t=0: burst, phase 0 < 5 -> on */
     assert(rec.count == 1 && rec.calls[0].r == 80);
 
-    test_now_ms = 60;
-    led_group_update(&group); /* t=60: burst, phase 60 -> off */
+    advance(6);
+    led_group_update(&group); /* t=6: burst, phase 6 -> off */
     assert(rec.count == 2 && rec.calls[1].r == 0);
 
-    test_now_ms = 110;
-    led_group_update(&group); /* t=110: burst, phase 10 -> on (2nd blink) */
+    advance(5);
+    led_group_update(&group); /* t=11: burst, phase 1 -> on (2nd blink) */
     assert(rec.count == 3 && rec.calls[2].r == 80);
 
-    test_now_ms = 310;
-    led_group_update(&group); /* t=310: past burst_ms=300 -> pause, off */
+    advance(20);
+    led_group_update(&group); /* t=31: past burst 30 -> pause, off */
     assert(rec.count == 4 && rec.calls[3].r == 0);
 
-    test_now_ms = 650;
-    led_group_update(&group); /* t=650: still in pause -> off, no new write */
+    advance(34);
+    led_group_update(&group); /* t=65: still in pause -> off, no new write */
     assert(rec.count == 4);
 
-    test_now_ms = 700;
-    led_group_update(&group); /* t=700 wraps to t=0 of next cycle -> on again */
+    advance(5);
+    led_group_update(&group); /* t=70 wraps to t=0 of next cycle -> on again */
     assert(rec.count == 5 && rec.calls[4].r == 80);
 }
 
@@ -277,12 +283,15 @@ static void test_blink_code_anchors_to_state_entry(void)
 
     led_group_init(&group, &strip, indices, 1);
     led_group_set_color(&group, 80, 80, 80);
-    led_group_set_period_ms(&group, 100);
-    led_group_set_blink_code(&group, 3, 400);
+    led_group_set_period_ticks(&group, 10);
+    led_group_set_blink_code(&group, 3, 40);
 
-    /* Entering mid-clock must still start the code at its first blink -
-     * blink codes anchor to state entry, not the absolute clock. */
-    test_now_ms = 12345;
+    /* Entering at an arbitrary counter value must still start the code at
+     * its first blink - blink codes anchor to state entry, not the shared
+     * counter. Advance to a tick that is NOT a multiple of the 70-tick
+     * cycle, where counter-phased logic would land mid-pause (off). */
+    align_to_phase0(70);
+    advance(37);
     led_group_set_state(&group, LED_GROUP_BLINK_CODE);
     recorder_reset(&rec);
 
@@ -292,8 +301,6 @@ static void test_blink_code_anchors_to_state_entry(void)
 
 int main(void)
 {
-    led_group_attach_ms_timer(fake_ms);
-
     test_off_writes_black_once_via_dirty_flag();
     test_on_writes_scaled_color_and_fans_out_to_all_indices();
     test_brightness_does_not_compound_on_repeated_calls();

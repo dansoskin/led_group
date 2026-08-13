@@ -31,13 +31,6 @@ static void fastled_write_pixel(uint16_t index, uint8_t r, uint8_t g, uint8_t b,
 
 static led_strip_t strip = { fastled_write_pixel, NULL };
 
-// millis() returns unsigned long, which isn't the same type as uint32_t on
-// every Arduino core - a one-line wrapper keeps the attach type-exact.
-static uint32_t arduino_millis(void)
-{
-    return (uint32_t)millis();
-}
-
 static const uint16_t status_indices[] = { 0 };
 static const uint16_t error_indices[] = { 1, 2 };
 
@@ -48,21 +41,20 @@ void setup()
 {
     FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
 
-    led_group_attach_ms_timer(arduino_millis);
-
     led_group_init(&status_led, &strip, status_indices, 1);
     led_group_init(&error_led, &strip, error_indices, 2);
 
     // Status LED breathes green to show the device is idle and ready.
+    // Durations are in ticks; loop() ticks every 10ms, so 200 ticks = 2s.
     led_group_set_color(&status_led, COLOR_READY);
     led_group_set_brightness_pct(&status_led, 50);
-    led_group_set_period_ms(&status_led, 2000);
+    led_group_set_period_ticks(&status_led, 200);
     led_group_set_state(&status_led, LED_GROUP_BREATHING);
 
     // Error LED signals "error code 2": 2 blinks, then a long pause, on repeat.
     led_group_set_color(&error_led, COLOR_ERROR);
-    led_group_set_period_ms(&error_led, 300);
-    led_group_set_blink_code(&error_led, 2, 1000);
+    led_group_set_period_ticks(&error_led, 30);
+    led_group_set_blink_code(&error_led, 2, 100);
     led_group_set_state(&error_led, LED_GROUP_BLINK_CODE);
 }
 
@@ -73,6 +65,9 @@ void loop()
 
     if (now - leds_timer >= 10) {
         leds_timer = now;
+
+        // One tick per rendering pass - this is the library's whole clock.
+        led_group_tick();
 
         led_group_update(&status_led);
         led_group_update(&error_led);
