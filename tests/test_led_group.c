@@ -31,6 +31,16 @@ static void recorder_reset(call_recorder_t *rec)
     rec->count = 0;
 }
 
+static void assert_pixel(const call_recorder_t *rec, size_t call,
+                          uint16_t index, uint8_t r, uint8_t g, uint8_t b)
+{
+    assert(call < rec->count);
+    assert(rec->calls[call].index == index);
+    assert(rec->calls[call].r == r);
+    assert(rec->calls[call].g == g);
+    assert(rec->calls[call].b == b);
+}
+
 /* The library's tick counter is shared across all tests in this process, so
  * every advance goes through this helper, which mirrors the count. Tests
  * that assert exact LUT/phase values first align to phase 0 of their period
@@ -136,6 +146,253 @@ static void test_brightness_does_not_compound_on_repeated_calls(void)
     /* Values above 100 clamp to 100 rather than wrapping/overflowing. */
     led_group_set_brightness_pct(&group, 255);
     assert(group.scaled_r == 200 && group.scaled_g == 100 && group.scaled_b == 50);
+}
+
+static void test_set_spot_stores_size_and_scales_ambient(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 4);
+    assert(group.spot_size == 0);
+    assert(group.amb_r == 0 && group.amb_g == 0 && group.amb_b == 0);
+    assert(group.scaled_amb_r == 0 && group.scaled_amb_g == 0 &&
+           group.scaled_amb_b == 0);
+    assert(group.last_spot_pos == 0);
+
+    led_group_set_spot(&group, 2, 200, 100, 50);
+    assert(group.spot_size == 2);
+    assert(group.amb_r == 200 && group.amb_g == 100 && group.amb_b == 50);
+    /* brightness defaults to 100, so scaled == base */
+    assert(group.scaled_amb_r == 200 && group.scaled_amb_g == 100 &&
+           group.scaled_amb_b == 50);
+
+    /* The ambient color is brightness-scaled exactly like the spot color,
+     * and recomputed from the untouched base every time so it cannot
+     * compound - the same bug class as the spot color's regression test
+     * above. */
+    led_group_set_brightness_pct(&group, 50);
+    assert(group.scaled_amb_r == 100 && group.scaled_amb_g == 50 &&
+           group.scaled_amb_b == 25);
+    led_group_set_brightness_pct(&group, 50);
+    assert(group.scaled_amb_r == 100 && group.scaled_amb_g == 50 &&
+           group.scaled_amb_b == 25);
+
+    /* A size past the end of the group clamps to the group's length, so a
+     * wrapped spot can never overlap its own tail. */
+    led_group_set_spot(&group, 99, 0, 0, 0);
+    assert(group.spot_size == 4);
+}
+
+static void test_spot_travels_in_index_order_and_wraps(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+    uint16_t i;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_spot(&group, 1, 20, 20, 20); /* size 1 -> no tail yet */
+    led_group_set_period_ticks(&group, 8);     /* 8 pixels -> 1 tick each */
+
+    /* Enter at a non-zero position: with size 1 the head is the only lit
+     * pixel, so an arbitrary starting position keeps the assertion below
+     * unambiguous. */
+    align_to_phase0(8);
+    advance(3);
+    led_group_set_state(&group, LED_GROUP_SPOT);
+    recorder_reset(&rec);
+
+    /* pos 3: every pixel is written, head at index 3, ambient elsewhere. */
+    led_group_update(&group);
+    assert(rec.count == 8);
+    for (i = 0; i < 8; i++) {
+        if (i == 3) {
+            assert_pixel(&rec, i, i, 0, 255, 0);
+        } else {
+            assert_pixel(&rec, i, i, 20, 20, 20);
+        }
+    }
+
+    /* One tick -> one pixel of travel, in indices-array order. */
+    advance(1);
+    led_group_update(&group);
+    assert(rec.count == 16);
+    assert_pixel(&rec, 8 + 3, 3, 20, 20, 20);
+    assert_pixel(&rec, 8 + 4, 4, 0, 255, 0);
+
+    /* Same tick, unmoved head -> no new writes. */
+    led_group_update(&group);
+    assert(rec.count == 16);
+
+    /* pos 8 wraps to 0. */
+    advance(4);
+    led_group_update(&group);
+    assert(rec.count == 24);
+    assert_pixel(&rec, 16 + 0, 0, 0, 255, 0);
+    assert_pixel(&rec, 16 + 7, 7, 20, 20, 20);
+}
+
+static void test_spot_tail_fades_linearly_into_ambient(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_spot(&group, 4, 20, 20, 20);
+    led_group_set_period_ticks(&group, 8);
+
+    align_to_phase0(8);
+    advance(5);
+    led_group_set_state(&group, LED_GROUP_SPOT);
+    recorder_reset(&rec);
+
+    /* pos 5, size 4 -> the spot covers 5 (head), 4, 3, 2 with weights
+     * 100, 75, 50, 25; indices 6, 7, 0, 1 are ambient. Values come from
+     * out = (spot * w + ambient * (100 - w)) / 100 per channel. */
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 0, 0, 20, 20, 20);
+    assert_pixel(&rec, 1, 1, 20, 20, 20);
+    assert_pixel(&rec, 2, 2, 15, 78, 15);   /* offset 3, w = 25 */
+    assert_pixel(&rec, 3, 3, 10, 137, 10);  /* offset 2, w = 50 */
+    assert_pixel(&rec, 4, 4, 5, 196, 5);    /* offset 1, w = 75 */
+    assert_pixel(&rec, 5, 5, 0, 255, 0);    /* offset 0, head */
+    assert_pixel(&rec, 6, 6, 20, 20, 20);
+    assert_pixel(&rec, 7, 7, 20, 20, 20);
+}
+
+static void test_spot_tail_spans_the_wrap_seam(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_spot(&group, 3, 20, 20, 20);
+    led_group_set_period_ticks(&group, 8);
+
+    /* The tail runs to lower positions, so the seam is crossed when the
+     * head is near the START of the group: head at 1 covers 1, 0, 7. */
+    align_to_phase0(8);
+    advance(1);
+    led_group_set_state(&group, LED_GROUP_SPOT);
+    recorder_reset(&rec);
+
+    /* size 3 -> weights 100, 66, 33. */
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 0, 0, 6, 175, 6);    /* offset 1, w = 66 */
+    assert_pixel(&rec, 1, 1, 0, 255, 0);    /* offset 0, head */
+    assert_pixel(&rec, 2, 2, 20, 20, 20);
+    assert_pixel(&rec, 3, 3, 20, 20, 20);
+    assert_pixel(&rec, 4, 4, 20, 20, 20);
+    assert_pixel(&rec, 5, 5, 20, 20, 20);
+    assert_pixel(&rec, 6, 6, 20, 20, 20);
+    assert_pixel(&rec, 7, 7, 13, 97, 13);   /* offset 2, w = 33 */
+}
+
+static void test_spot_degenerate_sizes_and_brightness(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+    uint16_t i;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_period_ticks(&group, 8);
+
+    /* size 0 means no spot: the whole group is ambient, and the weight
+     * division is never reached. */
+    led_group_set_spot(&group, 0, 20, 20, 20);
+    align_to_phase0(8);
+    advance(2);
+    led_group_set_state(&group, LED_GROUP_SPOT);
+    recorder_reset(&rec);
+
+    led_group_update(&group);
+    assert(rec.count == 8);
+    for (i = 0; i < 8; i++) {
+        assert_pixel(&rec, i, i, 20, 20, 20);
+    }
+
+    /* size 1 is a hard single-pixel spot: weight 100, no tail. */
+    led_group_set_spot(&group, 1, 20, 20, 20);
+    advance(1); /* pos 3, so the position check cannot suppress the write */
+    recorder_reset(&rec);
+
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 2, 2, 20, 20, 20);
+    assert_pixel(&rec, 3, 3, 0, 255, 0);
+    assert_pixel(&rec, 4, 4, 20, 20, 20);
+
+    /* brightness scales the spot AND the ambient color: 255 * 50 / 100
+     * is 127, 20 * 50 / 100 is 10. */
+    led_group_set_brightness_pct(&group, 50);
+    advance(1); /* pos 4 */
+    recorder_reset(&rec);
+
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 3, 3, 10, 10, 10);
+    assert_pixel(&rec, 4, 4, 0, 127, 0);
+    assert_pixel(&rec, 5, 5, 10, 10, 10);
+}
+
+static void test_entering_spot_at_position_zero_repaints(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_spot(&group, 1, 20, 20, 20);
+    led_group_set_period_ticks(&group, 8);
+
+    /* The spot path's change detection is the head position, and
+     * last_spot_pos starts at 0 - so entering the state at position 0 is
+     * exactly the case a position comparison cannot see. Without every
+     * setter marking the group dirty, this renders nothing and the strip
+     * stays black. */
+    align_to_phase0(8);
+    led_group_set_state(&group, LED_GROUP_SPOT);
+    recorder_reset(&rec);
+
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 0, 0, 0, 255, 0);
+    assert_pixel(&rec, 1, 1, 20, 20, 20);
+    assert_pixel(&rec, 7, 7, 20, 20, 20);
 }
 
 static void test_breathing_follows_lut_and_wraps_at_period_boundary(void)
@@ -304,6 +561,12 @@ int main(void)
     test_off_writes_black_once_via_dirty_flag();
     test_on_writes_scaled_color_and_fans_out_to_all_indices();
     test_brightness_does_not_compound_on_repeated_calls();
+    test_set_spot_stores_size_and_scales_ambient();
+    test_spot_travels_in_index_order_and_wraps();
+    test_spot_tail_fades_linearly_into_ambient();
+    test_spot_tail_spans_the_wrap_seam();
+    test_spot_degenerate_sizes_and_brightness();
+    test_entering_spot_at_position_zero_repaints();
     test_breathing_follows_lut_and_wraps_at_period_boundary();
     test_periodic_effects_are_synced_across_groups();
     test_blink_code_bursts_pauses_and_repeats();

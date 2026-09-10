@@ -28,6 +28,9 @@ static void led_group_recompute_scaled(led_group_t *group)
     group->scaled_r = (uint8_t)((uint16_t)group->base_r * group->brightness_pct / 100);
     group->scaled_g = (uint8_t)((uint16_t)group->base_g * group->brightness_pct / 100);
     group->scaled_b = (uint8_t)((uint16_t)group->base_b * group->brightness_pct / 100);
+    group->scaled_amb_r = (uint8_t)((uint16_t)group->amb_r * group->brightness_pct / 100);
+    group->scaled_amb_g = (uint8_t)((uint16_t)group->amb_g * group->brightness_pct / 100);
+    group->scaled_amb_b = (uint8_t)((uint16_t)group->amb_b * group->brightness_pct / 100);
 }
 
 void led_group_init(led_group_t *group, const led_strip_t *strip,
@@ -51,6 +54,15 @@ void led_group_init(led_group_t *group, const led_strip_t *strip,
     group->blink_code_count = 0;
     group->blink_code_pause_ticks = 0;
 
+    group->spot_size = 0;
+    group->amb_r = 0;
+    group->amb_g = 0;
+    group->amb_b = 0;
+    group->scaled_amb_r = 0;
+    group->scaled_amb_g = 0;
+    group->scaled_amb_b = 0;
+    group->last_spot_pos = 0;
+
     group->last_r = 0;
     group->last_g = 0;
     group->last_b = 0;
@@ -63,29 +75,51 @@ void led_group_set_color(led_group_t *group, uint8_t r, uint8_t g, uint8_t b)
     group->base_g = g;
     group->base_b = b;
     led_group_recompute_scaled(group);
+    group->dirty = true;
 }
 
 void led_group_set_brightness_pct(led_group_t *group, uint8_t pct)
 {
     group->brightness_pct = pct > 100 ? 100 : pct;
     led_group_recompute_scaled(group);
+    group->dirty = true;
 }
 
 void led_group_set_period_ticks(led_group_t *group, uint32_t period_ticks)
 {
     group->period_ticks = period_ticks;
+    group->dirty = true;
 }
 
 void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_ticks)
 {
     group->blink_code_count = count;
     group->blink_code_pause_ticks = pause_ticks;
+    group->dirty = true;
+}
+
+void led_group_set_spot(led_group_t *group, uint16_t spot_size,
+                         uint8_t amb_r, uint8_t amb_g, uint8_t amb_b)
+{
+    /* Clamp so a wrapped spot can never overlap its own tail, which would
+     * otherwise write one pixel twice in a single pass with two different
+     * colors. led_group_init() is a precondition of every setter, so
+     * indices_count is already known here. */
+    group->spot_size = spot_size > group->indices_count
+                           ? group->indices_count
+                           : spot_size;
+    group->amb_r = amb_r;
+    group->amb_g = amb_g;
+    group->amb_b = amb_b;
+    led_group_recompute_scaled(group);
+    group->dirty = true;
 }
 
 void led_group_set_state(led_group_t *group, led_group_state_t state)
 {
     group->state = state;
     group->state_entered_tick = s_ticks;
+    group->dirty = true;
 }
 
 led_group_state_t led_group_get_state(const led_group_t *group)
@@ -180,9 +214,86 @@ static void led_group_effective_color(const led_group_t *group,
     }
 }
 
+/* Blend fg toward bg by an integer percentage: w == 100 is pure fg,
+ * w == 0 pure bg. The uint16_t intermediates keep the products in range
+ * (the worst case is 255 * 100 == 25500). Callers must pass w <= 100,
+ * which the weight formula in led_group_render_spot() guarantees. */
+static uint8_t led_group_blend(uint8_t fg, uint8_t bg, uint8_t w)
+{
+    return (uint8_t)(((uint16_t)fg * w + (uint16_t)bg * (uint8_t)(100 - w)) / 100);
+}
+
+/* The head's position within the group's indices array. Phase comes off
+ * the shared tick counter, like BREATHING/BLINK, so groups sharing a
+ * period travel in lockstep; period_ticks is guarded against 0 the same
+ * way BREATHING guards it. One period is one full traversal. */
+static uint16_t led_group_spot_pos(const led_group_t *group)
+{
+    uint32_t period_ticks = group->period_ticks != 0 ? group->period_ticks : 1;
+    uint32_t phase = s_ticks % period_ticks;
+
+    return (uint16_t)(phase * group->indices_count / period_ticks);
+}
+
+/* The one state whose pixels are not all the same color, so it renders
+ * per-pixel and tracks its own change detection (head position) rather
+ * than the group-wide last_r/last_g/last_b. */
+static void led_group_render_spot(led_group_t *group)
+{
+    uint16_t count = group->indices_count;
+    uint16_t pos;
+    uint16_t i;
+
+    if (count == 0) {
+        return;
+    }
+
+    pos = led_group_spot_pos(group);
+
+    if (!group->dirty && pos == group->last_spot_pos) {
+        return;
+    }
+
+    for (i = 0; i < count; i++) {
+        /* Offset back from the head, wrapping at the end of the group:
+         * 0 is the head, the tail runs to lower positions, and anything
+         * past the tail is background. spot_size == 0 makes this
+         * comparison false for every pixel, which is both what "no spot"
+         * means and what keeps the division below unreachable. */
+        uint16_t offset = (uint16_t)((pos + count - i) % count);
+        uint8_t r, g, b;
+
+        if (offset < group->spot_size) {
+            /* Falls linearly from 100% at the head to 100/spot_size at
+             * the last tail pixel - never to 0, so the trailing edge
+             * stays visible instead of vanishing into the background. */
+            uint8_t w = (uint8_t)((uint32_t)(group->spot_size - offset) * 100u
+                                   / group->spot_size);
+            r = led_group_blend(group->scaled_r, group->scaled_amb_r, w);
+            g = led_group_blend(group->scaled_g, group->scaled_amb_g, w);
+            b = led_group_blend(group->scaled_b, group->scaled_amb_b, w);
+        } else {
+            r = group->scaled_amb_r;
+            g = group->scaled_amb_g;
+            b = group->scaled_amb_b;
+        }
+
+        group->strip->write_pixel(group->indices[i], r, g, b, group->strip->ctx);
+    }
+
+    group->last_spot_pos = pos;
+    group->dirty = false;
+}
+
 void led_group_update(led_group_t *group)
 {
     uint8_t r, g, b;
+
+    if (group->state == LED_GROUP_SPOT) {
+        led_group_render_spot(group);
+        return;
+    }
+
     led_group_effective_color(group, &r, &g, &b);
 
     if (group->dirty || r != group->last_r || g != group->last_g || b != group->last_b) {
