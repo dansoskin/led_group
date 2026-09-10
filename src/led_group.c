@@ -61,7 +61,6 @@ void led_group_init(led_group_t *group, const led_strip_t *strip,
     group->scaled_amb_r = 0;
     group->scaled_amb_g = 0;
     group->scaled_amb_b = 0;
-    group->spot_dir = LED_GROUP_SPOT_FORWARD;
     group->last_spot_pos = 0;
 
     group->last_r = 0;
@@ -116,12 +115,6 @@ void led_group_set_spot(led_group_t *group, uint16_t spot_size,
     group->dirty = true;
 }
 
-void led_group_set_spot_direction(led_group_t *group, led_group_spot_dir_t dir)
-{
-    group->spot_dir = dir;
-    group->dirty = true;
-}
-
 void led_group_set_state(led_group_t *group, led_group_state_t state)
 {
     group->state = state;
@@ -152,13 +145,36 @@ static uint8_t led_group_blend(uint8_t fg, uint8_t bg, uint8_t w)
  * led_group_update() fold the head position into its change detection
  * unconditionally: for a uniform state the position is always 0, so it
  * always compares equal and can never trigger a spurious rewrite. */
+/* The four states whose lit run travels along the group. */
+static bool led_group_state_is_moving(led_group_state_t state)
+{
+    return state == LED_GROUP_SPOT_FORWARD ||
+           state == LED_GROUP_SPOT_BACKWARD ||
+           state == LED_GROUP_COMET_FORWARD ||
+           state == LED_GROUP_COMET_BACKWARD;
+}
+
+static bool led_group_state_is_backward(led_group_state_t state)
+{
+    return state == LED_GROUP_SPOT_BACKWARD ||
+           state == LED_GROUP_COMET_BACKWARD;
+}
+
+/* COMET peaks at its leading pixel and fades back along its tail; SPOT
+ * peaks in its middle and fades toward both ends. */
+static bool led_group_state_is_comet(led_group_state_t state)
+{
+    return state == LED_GROUP_COMET_FORWARD ||
+           state == LED_GROUP_COMET_BACKWARD;
+}
+
 static uint16_t led_group_spot_pos(const led_group_t *group)
 {
     uint32_t period_ticks;
     uint32_t phase;
     uint16_t pos;
 
-    if (group->state != LED_GROUP_SPOT) {
+    if (!led_group_state_is_moving(group->state)) {
         return 0;
     }
 
@@ -166,10 +182,12 @@ static uint16_t led_group_spot_pos(const led_group_t *group)
     phase = s_ticks % period_ticks;
     pos = (uint16_t)(phase * group->indices_count / period_ticks);
 
-    /* Reverse just mirrors the position across the group, which keeps the
+    /* Backward mirrors the position across the group, which keeps the
      * motion continuous across the seam: as the phase runs a full period,
-     * a mirrored position sweeps from the last array slot down to 0. */
-    if (group->spot_dir == LED_GROUP_SPOT_REVERSE) {
+     * a mirrored position sweeps from the last array slot down to 0.
+     * indices_count is at least 1 here - led_group_update() returns before
+     * calling this on an empty group - so this cannot underflow. */
+    if (led_group_state_is_backward(group->state)) {
         pos = (uint16_t)(group->indices_count - 1u - pos);
     }
 
@@ -259,19 +277,47 @@ static void led_group_effective_color(const led_group_t *group, uint16_t i,
         break;
     }
 
-    case LED_GROUP_SPOT: {
+    case LED_GROUP_SPOT_FORWARD:
+    case LED_GROUP_SPOT_BACKWARD:
+    case LED_GROUP_COMET_FORWARD:
+    case LED_GROUP_COMET_BACKWARD: {
         /* indices_count is never 0 here - led_group_update() returns
          * before calling this when the group is empty, which is what
-         * keeps the modulo below safe. */
+         * keeps the modulos below safe. */
         uint16_t count = group->indices_count;
         uint16_t pos = led_group_spot_pos(group);
-        /* Offset back from the head, wrapping at the end of the group:
-         * 0 is the head, the tail runs to lower positions, and anything
-         * past the tail is background. spot_size == 0 makes this
-         * comparison false for every pixel, which is both what "no spot"
-         * means and what keeps the weight division unreachable. */
-        uint16_t offset = (uint16_t)((pos + count - i) % count);
-        if (offset < group->spot_size) {
+        uint16_t offset;
+        uint8_t w;
+
+        /* Distance back from the leading pixel, measured AGAINST the
+         * direction of travel so the run's body always trails behind its
+         * front. Forward runs toward higher array positions, so its body
+         * sits at lower ones; backward is the mirror. Measuring this the
+         * wrong way round would put a comet's tail ahead of its head.
+         *
+         * Anything past the run is background. spot_size == 0 makes the
+         * comparison below false for every pixel, which is both what "no
+         * run" means and what keeps the weight divisions unreachable. */
+        if (led_group_state_is_backward(group->state)) {
+            offset = (uint16_t)((i + count - pos) % count);
+        } else {
+            offset = (uint16_t)((pos + count - i) % count);
+        }
+
+        if (offset >= group->spot_size) {
+            *out_r = group->scaled_amb_r;
+            *out_g = group->scaled_amb_g;
+            *out_b = group->scaled_amb_b;
+            break;
+        }
+
+        if (led_group_state_is_comet(group->state)) {
+            /* Full at the leading pixel, falling linearly to
+             * 100/spot_size at the tail's last pixel - never to 0, so the
+             * trailing edge stays visible against the background. */
+            w = (uint8_t)((uint32_t)(group->spot_size - offset) * 100u
+                           / group->spot_size);
+        } else {
             /* Brightest in the middle, fading symmetrically toward both
              * ends, so the spot reads the same whichever way it travels.
              *
@@ -284,25 +330,21 @@ static void led_group_effective_color(const led_group_t *group, uint16_t i,
              * levels is how many distinct brightness steps there are, and
              * (spot_size / 2 + 1 - ring) counts down from it, so the middle
              * always lands on exactly 100 and each end pixel on 100/levels -
-             * never 0, which keeps the spot's edges visible against the
-             * background. An even spot_size has no single middle pixel, so
-             * the peak plateaus across the middle two. */
+             * never 0. An even spot_size has no single middle pixel, so the
+             * peak plateaus across the middle two. */
             uint16_t span2 = (uint16_t)(group->spot_size - 1u);
             uint16_t o2 = (uint16_t)(offset * 2u);
             uint16_t d2 = o2 >= span2 ? (uint16_t)(o2 - span2)
                                       : (uint16_t)(span2 - o2);
             uint16_t ring = (uint16_t)((d2 + 1u) / 2u);
             uint16_t levels = (uint16_t)((group->spot_size + 1u) / 2u);
-            uint8_t w = (uint8_t)((uint32_t)(group->spot_size / 2u + 1u - ring)
-                                   * 100u / levels);
-            *out_r = led_group_blend(group->scaled_r, group->scaled_amb_r, w);
-            *out_g = led_group_blend(group->scaled_g, group->scaled_amb_g, w);
-            *out_b = led_group_blend(group->scaled_b, group->scaled_amb_b, w);
-        } else {
-            *out_r = group->scaled_amb_r;
-            *out_g = group->scaled_amb_g;
-            *out_b = group->scaled_amb_b;
+            w = (uint8_t)((uint32_t)(group->spot_size / 2u + 1u - ring)
+                           * 100u / levels);
         }
+
+        *out_r = led_group_blend(group->scaled_r, group->scaled_amb_r, w);
+        *out_g = led_group_blend(group->scaled_g, group->scaled_amb_g, w);
+        *out_b = led_group_blend(group->scaled_b, group->scaled_amb_b, w);
         break;
     }
 

@@ -214,6 +214,49 @@ upper bound is not cosmetic - `led_group_blend()` computes `100 - w` in
 unsigned arithmetic, so a weight above 100 would underflow to a huge
 value and corrupt the channel.
 
+**Amended a third time 2026-09-10: direction moved into the state enum,
+and COMET reinstated.** The `led_group_set_spot_direction()` setter and
+its `led_group_spot_dir_t` enum are gone, replaced by four state values:
+
+```c
+LED_GROUP_SPOT_FORWARD,   LED_GROUP_SPOT_BACKWARD,
+LED_GROUP_COMET_FORWARD,  LED_GROUP_COMET_BACKWARD,
+```
+
+The single `LED_GROUP_SPOT` value no longer exists, so this is a breaking
+rename for consumers. `led_group_set_spot()` still configures all four -
+it carries the run's length and the ambient background, and the name was
+kept rather than churn the API further.
+
+COMET is the original bright-leading-pixel/fading-tail profile, brought
+back alongside the symmetric SPOT rather than replacing it, so both
+shapes are now available.
+
+The important subtlety is that the offset of a pixel within the run is
+measured AGAINST the direction of travel, so the body always trails the
+leading pixel:
+
+```c
+if (backward) offset = (i + count - pos) % count;
+else          offset = (pos + count - i) % count;
+```
+
+Measuring it the same way for both directions is the natural mistake, and
+it puts a backward comet's TAIL IN FRONT OF ITS HEAD. SPOT is symmetric
+and cannot expose the error, which is why
+`test_comet_backward_keeps_its_tail_behind_the_head` is the test that
+matters here. Backward also still mirrors the position
+(`pos = count - 1 - pos`) so the run travels toward lower positions; both
+changes are needed, and either alone is wrong.
+
+The example (`examples/basic_usage.c`) was rewritten around this: it
+carves a 38-LED strip into nine non-overlapping groups, one per state,
+renders the whole strip as one character per LED by brightness, and
+carries a short note per group on what that state does and which setters
+it needs. Its output is what confirmed the direction geometry end to end -
+`COMET_FWD |O::::ooo|` against `COMET_BWD |ooo::::O|`, each head leading
+and each tail trailing.
+
 The runtime cost is that `led_group_spot_pos()` is evaluated once per
 pixel rather than once per pass, so a 40-LED render pass does roughly 128
 software divides on the Cortex-M0+ instead of 48. Since the position only

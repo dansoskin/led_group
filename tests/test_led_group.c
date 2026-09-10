@@ -208,7 +208,7 @@ static void test_spot_travels_in_index_order_and_wraps(void)
      * unambiguous. */
     align_to_phase0(8);
     advance(3);
-    led_group_set_state(&group, LED_GROUP_SPOT);
+    led_group_set_state(&group, LED_GROUP_SPOT_FORWARD);
     recorder_reset(&rec);
 
     /* pos 3: every pixel is written, head at index 3, ambient elsewhere. */
@@ -258,7 +258,7 @@ static void test_spot_even_size_plateaus_across_the_middle(void)
 
     align_to_phase0(8);
     advance(5);
-    led_group_set_state(&group, LED_GROUP_SPOT);
+    led_group_set_state(&group, LED_GROUP_SPOT_FORWARD);
     recorder_reset(&rec);
 
     /* pos 5, size 4 -> the spot covers positions 5, 4, 3, 2. The profile is
@@ -297,7 +297,7 @@ static void test_spot_odd_size_peaks_on_one_middle_pixel(void)
 
     align_to_phase0(8);
     advance(6);
-    led_group_set_state(&group, LED_GROUP_SPOT);
+    led_group_set_state(&group, LED_GROUP_SPOT_FORWARD);
     recorder_reset(&rec);
 
     /* pos 6, size 5 -> positions 6, 5, 4, 3, 2 at weights 33, 66, 100,
@@ -316,7 +316,7 @@ static void test_spot_odd_size_peaks_on_one_middle_pixel(void)
 
 /* Direction only mirrors the position; the symmetric profile means the
  * spot looks identical either way, so this checks which way it moves. */
-static void test_spot_direction_reverses_travel(void)
+static void test_spot_backward_travels_toward_lower_indices(void)
 {
     call_recorder_t rec;
     recorder_reset(&rec);
@@ -328,37 +328,116 @@ static void test_spot_direction_reverses_travel(void)
     led_group_update(&group); /* consume the initial OFF dirty write */
 
     led_group_set_color(&group, 0, 255, 0);
-    led_group_set_spot(&group, 1, 20, 20, 20); /* size 1 -> head only */
+    led_group_set_spot(&group, 1, 20, 20, 20); /* size 1 -> one pixel lit */
     led_group_set_period_ticks(&group, 8);
-    assert(group.spot_dir == LED_GROUP_SPOT_FORWARD); /* the default */
 
-    led_group_set_spot_direction(&group, LED_GROUP_SPOT_REVERSE);
     align_to_phase0(8);
     advance(1);
-    led_group_set_state(&group, LED_GROUP_SPOT);
+    led_group_set_state(&group, LED_GROUP_SPOT_BACKWARD);
     recorder_reset(&rec);
 
-    /* Reverse mirrors the position: phase 1 forward would be position 1,
-     * so reversed it is 8 - 1 - 1 = 6. */
+    /* Backward mirrors the position: phase 1 forward would be position 1,
+     * so backward it is 8 - 1 - 1 = 6. */
     led_group_update(&group);
     assert(rec.count == 8);
     assert_pixel(&rec, 6, 6, 0, 255, 0);
     assert_pixel(&rec, 1, 1, 20, 20, 20);
 
-    /* One tick later the spot has moved DOWN one position, not up. */
+    /* One tick later it has moved DOWN one position, not up. */
     advance(1);
     led_group_update(&group);
     assert(rec.count == 16);
     assert_pixel(&rec, 8 + 5, 5, 0, 255, 0);
     assert_pixel(&rec, 8 + 6, 6, 20, 20, 20);
 
-    /* Switching back to forward mirrors it again, on the same tick. */
-    led_group_set_spot_direction(&group, LED_GROUP_SPOT_FORWARD);
+    /* The forward state mirrors it back, on the very same tick. */
+    led_group_set_state(&group, LED_GROUP_SPOT_FORWARD);
     recorder_reset(&rec);
     led_group_update(&group);
     assert(rec.count == 8);
     assert_pixel(&rec, 2, 2, 0, 255, 0);
     assert_pixel(&rec, 5, 5, 20, 20, 20);
+}
+
+static void test_comet_forward_peaks_at_the_leading_pixel(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_spot(&group, 4, 20, 20, 20);
+    led_group_set_period_ticks(&group, 8);
+
+    align_to_phase0(8);
+    advance(5);
+    led_group_set_state(&group, LED_GROUP_COMET_FORWARD);
+    recorder_reset(&rec);
+
+    /* Unlike SPOT, the comet is full at its leading pixel and falls
+     * linearly along the tail behind it: weights 100, 75, 50, 25. Moving
+     * forward, the tail sits at LOWER positions than the head. */
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 0, 0, 20, 20, 20);
+    assert_pixel(&rec, 1, 1, 20, 20, 20);
+    assert_pixel(&rec, 2, 2, 15, 78, 15);   /* offset 3, w = 25 */
+    assert_pixel(&rec, 3, 3, 10, 137, 10);  /* offset 2, w = 50 */
+    assert_pixel(&rec, 4, 4, 5, 196, 5);    /* offset 1, w = 75 */
+    assert_pixel(&rec, 5, 5, 0, 255, 0);    /* offset 0, head */
+    assert_pixel(&rec, 6, 6, 20, 20, 20);
+    assert_pixel(&rec, 7, 7, 20, 20, 20);
+}
+
+/* The one that catches the offset being measured the wrong way round: a
+ * backward comet's tail must sit at HIGHER positions than its head, so
+ * that it trails the direction of travel instead of leading it. */
+static void test_comet_backward_keeps_its_tail_behind_the_head(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_spot(&group, 4, 20, 20, 20);
+    led_group_set_period_ticks(&group, 8);
+
+    align_to_phase0(8);
+    advance(2);
+    led_group_set_state(&group, LED_GROUP_COMET_BACKWARD);
+    recorder_reset(&rec);
+
+    /* phase 2 mirrors to position 8 - 1 - 2 = 5, and the tail runs up
+     * from there through 6, 7 and round the seam to 0. */
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 0, 0, 15, 78, 15);   /* offset 3, w = 25 */
+    assert_pixel(&rec, 1, 1, 20, 20, 20);
+    assert_pixel(&rec, 2, 2, 20, 20, 20);
+    assert_pixel(&rec, 3, 3, 20, 20, 20);
+    assert_pixel(&rec, 4, 4, 20, 20, 20);
+    assert_pixel(&rec, 5, 5, 0, 255, 0);    /* offset 0, head */
+    assert_pixel(&rec, 6, 6, 5, 196, 5);    /* offset 1, w = 75 */
+    assert_pixel(&rec, 7, 7, 10, 137, 10);  /* offset 2, w = 50 */
+
+    /* One tick on, the head has moved down to 4 and 5 has become the
+     * first tail pixel - the tail follows the head rather than leading. */
+    advance(1);
+    led_group_update(&group);
+    assert(rec.count == 16);
+    assert_pixel(&rec, 8 + 4, 4, 0, 255, 0);
+    assert_pixel(&rec, 8 + 5, 5, 5, 196, 5);
+    assert_pixel(&rec, 8 + 3, 3, 20, 20, 20);
 }
 
 static void test_spot_spans_the_wrap_seam(void)
@@ -380,7 +459,7 @@ static void test_spot_spans_the_wrap_seam(void)
      * when pos is near the START of the group: pos 1 covers 1, 0, 7. */
     align_to_phase0(8);
     advance(1);
-    led_group_set_state(&group, LED_GROUP_SPOT);
+    led_group_set_state(&group, LED_GROUP_SPOT_FORWARD);
     recorder_reset(&rec);
 
     /* size 3 -> weights 50, 100, 50, so the middle pixel lands on index 0
@@ -417,7 +496,7 @@ static void test_spot_degenerate_sizes_and_brightness(void)
     led_group_set_spot(&group, 0, 20, 20, 20);
     align_to_phase0(8);
     advance(2);
-    led_group_set_state(&group, LED_GROUP_SPOT);
+    led_group_set_state(&group, LED_GROUP_SPOT_FORWARD);
     recorder_reset(&rec);
 
     led_group_update(&group);
@@ -471,7 +550,7 @@ static void test_entering_spot_at_position_zero_repaints(void)
      * setter marking the group dirty, this renders nothing and the strip
      * stays black. */
     align_to_phase0(8);
-    led_group_set_state(&group, LED_GROUP_SPOT);
+    led_group_set_state(&group, LED_GROUP_SPOT_FORWARD);
     recorder_reset(&rec);
 
     led_group_update(&group);
@@ -652,7 +731,9 @@ int main(void)
     test_spot_even_size_plateaus_across_the_middle();
     test_spot_spans_the_wrap_seam();
     test_spot_odd_size_peaks_on_one_middle_pixel();
-    test_spot_direction_reverses_travel();
+    test_spot_backward_travels_toward_lower_indices();
+    test_comet_forward_peaks_at_the_leading_pixel();
+    test_comet_backward_keeps_its_tail_behind_the_head();
     test_spot_degenerate_sizes_and_brightness();
     test_entering_spot_at_position_zero_repaints();
     test_breathing_follows_lut_and_wraps_at_period_boundary();

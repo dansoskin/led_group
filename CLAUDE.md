@@ -1,6 +1,6 @@
 # led_group
 
-Status: implemented — all 6 effect states complete, tested, and reviewed.
+Status: implemented — all 9 effect states complete, tested, and reviewed.
 
 ## What this is
 A small, dependency-free C library for independently controlling named
@@ -24,48 +24,62 @@ so it can be reused as a git submodule across multiple embedded projects
   (5 TDD tasks, executed inline).
 - `include/led_group.h` + `src/led_group.c` implement the full API: `tick`,
   `init`, `set_color`, `set_brightness_pct`, `set_period_ticks`,
-  `set_blink_code`, `set_spot`, `set_spot_direction`,
-  `set_state`/`get_state`, `update`. All 6
-  states (OFF/ON/BREATHING/BLINK/BLINK_CODE/SPOT) are real, including the
+  `set_blink_code`, `set_spot`, `set_state`/`get_state`, `update`. All 9
+  states (OFF/ON/BREATHING/BLINK/BLINK_CODE, plus SPOT and COMET each
+  forward and backward) are real, including the
   `breathe_lut` integer lookup table and the dirty-flag/write-only-on-change
   logic. The historical compounding-brightness bug from the original
   `LightenObject` is fixed and regression-tested.
-- SPOT is the one state that is NOT a single uniform color per group: a
-  bright spot travels the group in `indices` array order, wrapping at the
-  end, over an ambient background. It is brightest in its MIDDLE and fades
-  symmetrically toward both of its ends (changed 2026-09-10 from an
-  original bright-head/fading-tail comet), so it reads the same whichever
-  way it moves — and it can move either way, via
-  `led_group_set_spot_direction()` with `led_group_spot_dir_t`
-  (FORWARD is 0, so groups that never call it keep the original travel).
-  Because the profile is symmetric, direction only mirrors the position;
-  it does not touch the weights. The weight math is integer and works in
-  DOUBLED distances so an even spot_size — whose middle falls between two
-  pixels — stays exact; an even size therefore plateaus its peak across
-  the middle two pixels. Verified exhaustively for sizes 1-200: the peak
-  is always exactly 100 and the ends never reach 0, which also matters
-  because `led_group_blend()` computes `100 - w` unsigned and would
-  underflow if a weight ever exceeded 100.
-  That per-pixel nature is why `led_group_effective_color()` takes a
-  pixel index:
-  every state resolves through that one function, the four uniform states
-  ignore the index, and `led_group_update()` calls it once per pixel.
-  (Refactored 2026-09-10 from an earlier `led_group_render_spot()` that
-  sat outside `effective_color` — see the spec amendment. Net effect was
-  76 bytes LESS flash.) Change detection is the one place the two shapes
-  still differ: a uniform state is described by pixel 0's resolved color,
-  while the spot also needs its head position, since a pixel far from the
-  spot holds the ambient color for many ticks while the strip is moving.
-  `led_group_spot_pos()` returns 0 for every non-SPOT state, so
+- The four MOVING states are the ones that are NOT a single uniform color
+  per group: a lit run of `set_spot`'s length travels the group in
+  `indices` array order, wrapping at the end, over that call's ambient
+  background. They are `LED_GROUP_SPOT_FORWARD`/`_BACKWARD` and
+  `LED_GROUP_COMET_FORWARD`/`_BACKWARD` — direction is part of the state
+  rather than a separate setter. (That was the shape only briefly: a
+  `led_group_set_spot_direction()` + `led_group_spot_dir_t` pair was
+  replaced by these four state values on 2026-09-10, and COMET was
+  reinstated alongside SPOT at the same time.)
+- SPOT peaks in the MIDDLE of the run and fades toward both ends, so it
+  looks the same whichever way it travels. COMET peaks at the LEADING
+  pixel and fades back along a tail, so its direction shows in its shape.
+  Both profiles are integer-only. SPOT works in DOUBLED distances so an
+  even spot_size — whose middle falls between two pixels — stays exact,
+  and an even size plateaus its peak across the middle two pixels.
+  Verified exhaustively for sizes 1-200 that SPOT's peak is always exactly
+  100 and its ends never reach 0; the upper bound is not cosmetic, because
+  `led_group_blend()` computes `100 - w` unsigned and a weight above 100
+  would underflow and corrupt the channel.
+- The offset of a pixel within the run is measured AGAINST the direction
+  of travel, so the body always trails the leading pixel: forward runs
+  toward higher array positions and its body sits at lower ones, backward
+  is the mirror. Measuring it the same way for both directions is the easy
+  bug here — it puts a backward comet's tail in FRONT of its head, which
+  is what `test_comet_backward_keeps_its_tail_behind_the_head` exists to
+  catch. SPOT is symmetric so it cannot expose this, which is exactly why
+  the comet test is the one that matters.
+- A moving run takes its color from the group's base color and its speed
+  from `period_ticks` (one period = one full traversal), so `set_spot`
+  only carries the run's length and the ambient background. That one call
+  configures all four moving states.
+- Being per-pixel is why `led_group_effective_color()` takes a pixel
+  index: every state resolves through that one function, the five uniform
+  states ignore the index, and `led_group_update()` calls it once per
+  pixel. (Refactored 2026-09-10 from an earlier `led_group_render_spot()`
+  that sat outside `effective_color` — see the spec amendment. Net effect
+  was 76 bytes LESS flash.)
+- Change detection is the one place the two shapes still differ: a
+  uniform state is fully described by pixel 0's resolved color, while a
+  moving run also needs its leading position, since a pixel far from the
+  run holds the ambient color for many ticks while the strip is still
+  moving. `led_group_spot_pos()` returns 0 for every non-moving state, so
   `update()` folds position into the comparison unconditionally without
-  ever triggering a spurious rewrite. Its color is the group's
-  base color and its speed is `period_ticks` (one period = one full
-  traversal), so `set_spot` only carries the ambient color and the size.
+  ever triggering a spurious rewrite on a uniform state — the
+  `LED_GROUP_ON` test catches that regression if the guard is dropped.
 - The dirty flag is set by EVERY setter and by `led_group_set_state()`,
   not just by `init` (changed 2026-09-10). The uniform states never needed
   that — their `last_r`/`last_g`/`last_b` comparison catches any change —
-  but the spot path compares head position, so entering SPOT while the
-  head sits at position 0 rendered nothing and left the strip black. A
+  but a moving run compares its leading position, so entering one while
+  that position is 0 rendered nothing and left the strip black. A
   flat "any mutation marks the group dirty" invariant fixes that with no
   per-state exception, and also covers SPOT -> ON, where
   `last_r`/`last_g`/`last_b` are stale because the spot path never
@@ -82,8 +96,8 @@ so it can be reused as a git submodule across multiple embedded projects
   each entered its state; BLINK_CODE anchors to state entry so an error
   code always plays from its first blink.
 - `tests/test_led_group.c` has one assert-based test per case in the specs'
-  testing plans plus sync/anchor coverage (15 tests total), run via CTest.
-  The 8 spot tests pin exact per-pixel RGB values; those were derived from
+  testing plans plus sync/anchor coverage (17 tests total), run via CTest.
+  The 10 moving-effect tests pin exact per-pixel RGB values; those were derived from
   the weight/blend formulas in the spot spec before the code was run, so a
   failure there means the implementation drifted, not the expectation.
   The tick counter is process-global and never reset, so tests mirror it
@@ -147,7 +161,8 @@ those repos from here; they're separate projects.
   a submodule, rewriting `leds.cpp`/`leds.h` to use it) is explicitly out of
   scope for this repo per the spec — a separate follow-up task in those
   repos.
-- Likewise, switching `164_traps_motor`'s `Core/Src/leds.c` from BREATHING
-  to the new LED_GROUP_SPOT state is a change in that project, not here.
+- Likewise, `164_traps_motor`'s `Core/Src/leds.c` choosing among the
+  moving states is a change in that project, not here (it currently runs
+  LED_GROUP_SPOT_FORWARD via its own `LED_SPOT_STATE` macro).
   Its 40-LED strip and in-order `all_indices[i] = i` are exactly the
   layout the spot was designed against.
