@@ -188,6 +188,32 @@ whenever the notional position ticked over, which the pre-existing
 keeps the SPOT case's `% count` safe. `last_r`/`last_g`/`last_b` now
 hold pixel 0's color for every state, spot included.
 
+**Amended again 2026-09-10: symmetric profile and direction control.**
+The original bright-head/linearly-fading-tail comet was replaced by a
+profile that is brightest in the MIDDLE of the spot and fades
+symmetrically toward both ends, and a `led_group_set_spot_direction()`
+setter (`led_group_spot_dir_t`: FORWARD = 0, REVERSE) was added.
+
+Because the profile is symmetric, direction only mirrors the position -
+`pos = count - 1 - pos` - and never touches the weights. That keeps the
+motion continuous across the seam.
+
+The weight math works in DOUBLED distances, because an even spot_size has
+its middle between two pixels and integer halves would lose it. For a
+pixel at `offset` within the spot: `span2 = spot_size - 1`,
+`d2 = |2*offset - span2|`, `ring = (d2 + 1) / 2`,
+`levels = (spot_size + 1) / 2`, and
+`w = (spot_size / 2 + 1 - ring) * 100 / levels`. An even size plateaus
+its peak across the middle two pixels so the peak still reaches the full
+spot color. Sample profiles: size 3 gives 50/100/50, size 5 gives
+33/66/100/66/33, size 6 gives 33/66/100/100/66/33.
+
+This was verified exhaustively for sizes 1-200: the peak is always
+exactly 100, the ends never reach 0, and every profile is symmetric. The
+upper bound is not cosmetic - `led_group_blend()` computes `100 - w` in
+unsigned arithmetic, so a weight above 100 would underflow to a huge
+value and corrupt the channel.
+
 The runtime cost is that `led_group_spot_pos()` is evaluated once per
 pixel rather than once per pass, so a 40-LED render pass does roughly 128
 software divides on the Cortex-M0+ instead of 48. Since the position only
