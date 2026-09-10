@@ -55,6 +55,9 @@ typedef struct {
     uint16_t last_spot_pos;
 
     uint8_t last_r, last_g, last_b;
+    /* Set by every setter and by led_group_set_state - any mutation
+     * forces the next led_group_update() to write, whatever the change
+     * detection for the current state happens to compare. */
     bool dirty;
 } led_group_t;
 

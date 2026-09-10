@@ -364,6 +364,37 @@ static void test_spot_degenerate_sizes_and_brightness(void)
     assert_pixel(&rec, 5, 5, 10, 10, 10);
 }
 
+static void test_entering_spot_at_position_zero_repaints(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_spot(&group, 1, 20, 20, 20);
+    led_group_set_period_ticks(&group, 8);
+
+    /* The spot path's change detection is the head position, and
+     * last_spot_pos starts at 0 - so entering the state at position 0 is
+     * exactly the case a position comparison cannot see. Without every
+     * setter marking the group dirty, this renders nothing and the strip
+     * stays black. */
+    align_to_phase0(8);
+    led_group_set_state(&group, LED_GROUP_SPOT);
+    recorder_reset(&rec);
+
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 0, 0, 0, 255, 0);
+    assert_pixel(&rec, 1, 1, 20, 20, 20);
+    assert_pixel(&rec, 7, 7, 20, 20, 20);
+}
+
 static void test_breathing_follows_lut_and_wraps_at_period_boundary(void)
 {
     call_recorder_t rec;
@@ -535,6 +566,7 @@ int main(void)
     test_spot_tail_fades_linearly_into_ambient();
     test_spot_tail_spans_the_wrap_seam();
     test_spot_degenerate_sizes_and_brightness();
+    test_entering_spot_at_position_zero_repaints();
     test_breathing_follows_lut_and_wraps_at_period_boundary();
     test_periodic_effects_are_synced_across_groups();
     test_blink_code_bursts_pauses_and_repeats();

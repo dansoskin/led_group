@@ -75,23 +75,27 @@ void led_group_set_color(led_group_t *group, uint8_t r, uint8_t g, uint8_t b)
     group->base_g = g;
     group->base_b = b;
     led_group_recompute_scaled(group);
+    group->dirty = true;
 }
 
 void led_group_set_brightness_pct(led_group_t *group, uint8_t pct)
 {
     group->brightness_pct = pct > 100 ? 100 : pct;
     led_group_recompute_scaled(group);
+    group->dirty = true;
 }
 
 void led_group_set_period_ticks(led_group_t *group, uint32_t period_ticks)
 {
     group->period_ticks = period_ticks;
+    group->dirty = true;
 }
 
 void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_ticks)
 {
     group->blink_code_count = count;
     group->blink_code_pause_ticks = pause_ticks;
+    group->dirty = true;
 }
 
 void led_group_set_spot(led_group_t *group, uint16_t spot_size,
@@ -108,12 +112,14 @@ void led_group_set_spot(led_group_t *group, uint16_t spot_size,
     group->amb_g = amb_g;
     group->amb_b = amb_b;
     led_group_recompute_scaled(group);
+    group->dirty = true;
 }
 
 void led_group_set_state(led_group_t *group, led_group_state_t state)
 {
     group->state = state;
     group->state_entered_tick = s_ticks;
+    group->dirty = true;
 }
 
 led_group_state_t led_group_get_state(const led_group_t *group)
