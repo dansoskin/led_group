@@ -208,9 +208,86 @@ static void led_group_effective_color(const led_group_t *group,
     }
 }
 
+/* Blend fg toward bg by an integer percentage: w == 100 is pure fg,
+ * w == 0 pure bg. The uint16_t intermediates keep the products in range
+ * (the worst case is 255 * 100 == 25500). Callers must pass w <= 100,
+ * which the weight formula in led_group_render_spot() guarantees. */
+static uint8_t led_group_blend(uint8_t fg, uint8_t bg, uint8_t w)
+{
+    return (uint8_t)(((uint16_t)fg * w + (uint16_t)bg * (uint8_t)(100 - w)) / 100);
+}
+
+/* The head's position within the group's indices array. Phase comes off
+ * the shared tick counter, like BREATHING/BLINK, so groups sharing a
+ * period travel in lockstep; period_ticks is guarded against 0 the same
+ * way BREATHING guards it. One period is one full traversal. */
+static uint16_t led_group_spot_pos(const led_group_t *group)
+{
+    uint32_t period_ticks = group->period_ticks != 0 ? group->period_ticks : 1;
+    uint32_t phase = s_ticks % period_ticks;
+
+    return (uint16_t)(phase * group->indices_count / period_ticks);
+}
+
+/* The one state whose pixels are not all the same color, so it renders
+ * per-pixel and tracks its own change detection (head position) rather
+ * than the group-wide last_r/last_g/last_b. */
+static void led_group_render_spot(led_group_t *group)
+{
+    uint16_t count = group->indices_count;
+    uint16_t pos;
+    uint16_t i;
+
+    if (count == 0) {
+        return;
+    }
+
+    pos = led_group_spot_pos(group);
+
+    if (!group->dirty && pos == group->last_spot_pos) {
+        return;
+    }
+
+    for (i = 0; i < count; i++) {
+        /* Offset back from the head, wrapping at the end of the group:
+         * 0 is the head, the tail runs to lower positions, and anything
+         * past the tail is background. spot_size == 0 makes this
+         * comparison false for every pixel, which is both what "no spot"
+         * means and what keeps the division below unreachable. */
+        uint16_t offset = (uint16_t)((pos + count - i) % count);
+        uint8_t r, g, b;
+
+        if (offset < group->spot_size) {
+            /* Falls linearly from 100% at the head to 100/spot_size at
+             * the last tail pixel - never to 0, so the trailing edge
+             * stays visible instead of vanishing into the background. */
+            uint8_t w = (uint8_t)((uint32_t)(group->spot_size - offset) * 100u
+                                   / group->spot_size);
+            r = led_group_blend(group->scaled_r, group->scaled_amb_r, w);
+            g = led_group_blend(group->scaled_g, group->scaled_amb_g, w);
+            b = led_group_blend(group->scaled_b, group->scaled_amb_b, w);
+        } else {
+            r = group->scaled_amb_r;
+            g = group->scaled_amb_g;
+            b = group->scaled_amb_b;
+        }
+
+        group->strip->write_pixel(group->indices[i], r, g, b, group->strip->ctx);
+    }
+
+    group->last_spot_pos = pos;
+    group->dirty = false;
+}
+
 void led_group_update(led_group_t *group)
 {
     uint8_t r, g, b;
+
+    if (group->state == LED_GROUP_SPOT) {
+        led_group_render_spot(group);
+        return;
+    }
+
     led_group_effective_color(group, &r, &g, &b);
 
     if (group->dirty || r != group->last_r || g != group->last_g || b != group->last_b) {
