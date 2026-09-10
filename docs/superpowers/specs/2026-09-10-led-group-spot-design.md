@@ -171,6 +171,31 @@ stores `pos` in `last_spot_pos` and clears `dirty`.
 `last_r`/`last_g`/`last_b` are not maintained by the spot path; the dirty
 invariant below is what covers transitions in and out of it.
 
+**Amended 2026-09-10, after implementation.** The separate
+`led_group_render_spot()` was folded into `led_group_effective_color()`,
+which now takes a pixel index; every state resolves through that one
+function and `led_group_update()` calls it per pixel. The four uniform
+states ignore the index. This was a deliberate consistency choice, and it
+cost nothing: flash went DOWN 76 bytes, because removing the separate
+render function saved more than the two callers grew.
+
+Two things had to adapt. First, `led_group_spot_pos()` now returns 0 for
+every non-SPOT state — without that, folding the head position into
+`update()`'s change detection made uniform states rewrite spuriously
+whenever the notional position ticked over, which the pre-existing
+`LED_GROUP_ON` test caught. Second, `update()` guards
+`indices_count == 0` and returns before the probe call, which is what
+keeps the SPOT case's `% count` safe. `last_r`/`last_g`/`last_b` now
+hold pixel 0's color for every state, spot included.
+
+The runtime cost is that `led_group_spot_pos()` is evaluated once per
+pixel rather than once per pass, so a 40-LED render pass does roughly 128
+software divides on the Cortex-M0+ instead of 48. Since the position only
+changes every few ticks, most passes take the cheap early-return path
+(about 5 divides), so the average lands near a quarter of one percent of
+a 64 MHz core at a 10 ms cadence. If that ever matters, hoisting `pos`
+out of the per-pixel call is the fix.
+
 ## Behavior change to existing code: the dirty invariant
 
 **Every setter and `led_group_set_state()` will set `dirty = true`.**

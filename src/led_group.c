@@ -127,7 +127,45 @@ led_group_state_t led_group_get_state(const led_group_t *group)
     return group->state;
 }
 
-static void led_group_effective_color(const led_group_t *group,
+/* Blend fg toward bg by an integer percentage: w == 100 is pure fg,
+ * w == 0 pure bg. The uint16_t intermediates keep the products in range
+ * (the worst case is 255 * 100 == 25500). Callers must pass w <= 100,
+ * which the weight formula in the SPOT case below guarantees. */
+static uint8_t led_group_blend(uint8_t fg, uint8_t bg, uint8_t w)
+{
+    return (uint8_t)(((uint16_t)fg * w + (uint16_t)bg * (uint8_t)(100 - w)) / 100);
+}
+
+/* The spot head's position within the group's indices array. Phase derives
+ * from the shared tick counter, like BREATHING/BLINK, so groups sharing a
+ * period travel in lockstep, and period_ticks is guarded against 0 the same
+ * way. One period is one full traversal of the group.
+ *
+ * Returns 0 for every state other than SPOT. That is what lets
+ * led_group_update() fold the head position into its change detection
+ * unconditionally: for a uniform state the position is always 0, so it
+ * always compares equal and can never trigger a spurious rewrite. */
+static uint16_t led_group_spot_pos(const led_group_t *group)
+{
+    uint32_t period_ticks;
+    uint32_t phase;
+
+    if (group->state != LED_GROUP_SPOT) {
+        return 0;
+    }
+
+    period_ticks = group->period_ticks != 0 ? group->period_ticks : 1;
+    phase = s_ticks % period_ticks;
+
+    return (uint16_t)(phase * group->indices_count / period_ticks);
+}
+
+/* The color of a single pixel, identified by its position in the group's
+ * indices array. Every state resolves through here. The four uniform
+ * states ignore the index - their answer is the same for every pixel in
+ * the group - but SPOT is per-pixel, which is why the index is a
+ * parameter at all. */
+static void led_group_effective_color(const led_group_t *group, uint16_t i,
                                        uint8_t *out_r, uint8_t *out_g, uint8_t *out_b)
 {
     switch (group->state) {
@@ -205,6 +243,35 @@ static void led_group_effective_color(const led_group_t *group,
         break;
     }
 
+    case LED_GROUP_SPOT: {
+        /* indices_count is never 0 here - led_group_update() returns
+         * before calling this when the group is empty, which is what
+         * keeps the modulo below safe. */
+        uint16_t count = group->indices_count;
+        uint16_t pos = led_group_spot_pos(group);
+        /* Offset back from the head, wrapping at the end of the group:
+         * 0 is the head, the tail runs to lower positions, and anything
+         * past the tail is background. spot_size == 0 makes this
+         * comparison false for every pixel, which is both what "no spot"
+         * means and what keeps the weight division unreachable. */
+        uint16_t offset = (uint16_t)((pos + count - i) % count);
+        if (offset < group->spot_size) {
+            /* Falls linearly from 100% at the head to 100/spot_size at
+             * the last tail pixel - never to 0, so the trailing edge
+             * stays visible instead of vanishing into the background. */
+            uint8_t w = (uint8_t)((uint32_t)(group->spot_size - offset) * 100u
+                                   / group->spot_size);
+            *out_r = led_group_blend(group->scaled_r, group->scaled_amb_r, w);
+            *out_g = led_group_blend(group->scaled_g, group->scaled_amb_g, w);
+            *out_b = led_group_blend(group->scaled_b, group->scaled_amb_b, w);
+        } else {
+            *out_r = group->scaled_amb_r;
+            *out_g = group->scaled_amb_g;
+            *out_b = group->scaled_amb_b;
+        }
+        break;
+    }
+
     case LED_GROUP_OFF:
     default:
         *out_r = 0;
@@ -214,96 +281,43 @@ static void led_group_effective_color(const led_group_t *group,
     }
 }
 
-/* Blend fg toward bg by an integer percentage: w == 100 is pure fg,
- * w == 0 pure bg. The uint16_t intermediates keep the products in range
- * (the worst case is 255 * 100 == 25500). Callers must pass w <= 100,
- * which the weight formula in led_group_render_spot() guarantees. */
-static uint8_t led_group_blend(uint8_t fg, uint8_t bg, uint8_t w)
+void led_group_update(led_group_t *group)
 {
-    return (uint8_t)(((uint16_t)fg * w + (uint16_t)bg * (uint8_t)(100 - w)) / 100);
-}
-
-/* The head's position within the group's indices array. Phase comes off
- * the shared tick counter, like BREATHING/BLINK, so groups sharing a
- * period travel in lockstep; period_ticks is guarded against 0 the same
- * way BREATHING guards it. One period is one full traversal. */
-static uint16_t led_group_spot_pos(const led_group_t *group)
-{
-    uint32_t period_ticks = group->period_ticks != 0 ? group->period_ticks : 1;
-    uint32_t phase = s_ticks % period_ticks;
-
-    return (uint16_t)(phase * group->indices_count / period_ticks);
-}
-
-/* The one state whose pixels are not all the same color, so it renders
- * per-pixel and tracks its own change detection (head position) rather
- * than the group-wide last_r/last_g/last_b. */
-static void led_group_render_spot(led_group_t *group)
-{
-    uint16_t count = group->indices_count;
+    uint8_t probe_r, probe_g, probe_b;
     uint16_t pos;
     uint16_t i;
 
-    if (count == 0) {
+    /* Nothing to render, and it is also what keeps the SPOT case's modulo
+     * safe against a zero-length group. */
+    if (group->indices_count == 0) {
         return;
     }
 
+    /* Change detection has to cover both shapes of effect. A uniform state
+     * is fully described by its resolved color, so pixel 0's color speaks
+     * for the whole group. The spot needs its head position as well: while
+     * the spot sits away from pixel 0 that pixel stays at the ambient
+     * color for many ticks, even though the strip as a whole changes every
+     * few ticks. For a uniform state the position is always 0 (see
+     * led_group_spot_pos), so including it costs nothing. */
     pos = led_group_spot_pos(group);
+    led_group_effective_color(group, 0, &probe_r, &probe_g, &probe_b);
 
-    if (!group->dirty && pos == group->last_spot_pos) {
+    if (!group->dirty && pos == group->last_spot_pos &&
+        probe_r == group->last_r && probe_g == group->last_g &&
+        probe_b == group->last_b) {
         return;
     }
 
-    for (i = 0; i < count; i++) {
-        /* Offset back from the head, wrapping at the end of the group:
-         * 0 is the head, the tail runs to lower positions, and anything
-         * past the tail is background. spot_size == 0 makes this
-         * comparison false for every pixel, which is both what "no spot"
-         * means and what keeps the division below unreachable. */
-        uint16_t offset = (uint16_t)((pos + count - i) % count);
+    for (i = 0; i < group->indices_count; i++) {
         uint8_t r, g, b;
-
-        if (offset < group->spot_size) {
-            /* Falls linearly from 100% at the head to 100/spot_size at
-             * the last tail pixel - never to 0, so the trailing edge
-             * stays visible instead of vanishing into the background. */
-            uint8_t w = (uint8_t)((uint32_t)(group->spot_size - offset) * 100u
-                                   / group->spot_size);
-            r = led_group_blend(group->scaled_r, group->scaled_amb_r, w);
-            g = led_group_blend(group->scaled_g, group->scaled_amb_g, w);
-            b = led_group_blend(group->scaled_b, group->scaled_amb_b, w);
-        } else {
-            r = group->scaled_amb_r;
-            g = group->scaled_amb_g;
-            b = group->scaled_amb_b;
-        }
-
+        led_group_effective_color(group, i, &r, &g, &b);
         group->strip->write_pixel(group->indices[i], r, g, b, group->strip->ctx);
     }
 
+    group->last_r = probe_r;
+    group->last_g = probe_g;
+    group->last_b = probe_b;
     group->last_spot_pos = pos;
     group->dirty = false;
-}
-
-void led_group_update(led_group_t *group)
-{
-    uint8_t r, g, b;
-
-    if (group->state == LED_GROUP_SPOT) {
-        led_group_render_spot(group);
-        return;
-    }
-
-    led_group_effective_color(group, &r, &g, &b);
-
-    if (group->dirty || r != group->last_r || g != group->last_g || b != group->last_b) {
-        uint16_t i;
-        for (i = 0; i < group->indices_count; i++) {
-            group->strip->write_pixel(group->indices[i], r, g, b, group->strip->ctx);
-        }
-        group->last_r = r;
-        group->last_g = g;
-        group->last_b = b;
-        group->dirty = false;
-    }
 }
