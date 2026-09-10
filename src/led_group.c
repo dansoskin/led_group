@@ -28,6 +28,9 @@ static void led_group_recompute_scaled(led_group_t *group)
     group->scaled_r = (uint8_t)((uint16_t)group->base_r * group->brightness_pct / 100);
     group->scaled_g = (uint8_t)((uint16_t)group->base_g * group->brightness_pct / 100);
     group->scaled_b = (uint8_t)((uint16_t)group->base_b * group->brightness_pct / 100);
+    group->scaled_amb_r = (uint8_t)((uint16_t)group->amb_r * group->brightness_pct / 100);
+    group->scaled_amb_g = (uint8_t)((uint16_t)group->amb_g * group->brightness_pct / 100);
+    group->scaled_amb_b = (uint8_t)((uint16_t)group->amb_b * group->brightness_pct / 100);
 }
 
 void led_group_init(led_group_t *group, const led_strip_t *strip,
@@ -50,6 +53,15 @@ void led_group_init(led_group_t *group, const led_strip_t *strip,
     group->period_ticks = 100;
     group->blink_code_count = 0;
     group->blink_code_pause_ticks = 0;
+
+    group->spot_size = 0;
+    group->amb_r = 0;
+    group->amb_g = 0;
+    group->amb_b = 0;
+    group->scaled_amb_r = 0;
+    group->scaled_amb_g = 0;
+    group->scaled_amb_b = 0;
+    group->last_spot_pos = 0;
 
     group->last_r = 0;
     group->last_g = 0;
@@ -80,6 +92,22 @@ void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_
 {
     group->blink_code_count = count;
     group->blink_code_pause_ticks = pause_ticks;
+}
+
+void led_group_set_spot(led_group_t *group, uint16_t spot_size,
+                         uint8_t amb_r, uint8_t amb_g, uint8_t amb_b)
+{
+    /* Clamp so a wrapped spot can never overlap its own tail, which would
+     * otherwise write one pixel twice in a single pass with two different
+     * colors. led_group_init() is a precondition of every setter, so
+     * indices_count is already known here. */
+    group->spot_size = spot_size > group->indices_count
+                           ? group->indices_count
+                           : spot_size;
+    group->amb_r = amb_r;
+    group->amb_g = amb_g;
+    group->amb_b = amb_b;
+    led_group_recompute_scaled(group);
 }
 
 void led_group_set_state(led_group_t *group, led_group_state_t state)

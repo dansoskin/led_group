@@ -15,6 +15,7 @@ typedef enum {
     LED_GROUP_BREATHING,
     LED_GROUP_BLINK,
     LED_GROUP_BLINK_CODE,
+    LED_GROUP_SPOT,
 } led_group_state_t;
 
 typedef void (*led_group_write_pixel_fn)(uint16_t index, uint8_t r, uint8_t g,
@@ -43,6 +44,16 @@ typedef struct {
     uint8_t blink_code_count;
     uint32_t blink_code_pause_ticks;
 
+    /* LED_GROUP_SPOT only. The spot's own color is the group's base
+     * color; these are the background it fades into and its length.
+     * Ambient is kept both as given and pre-scaled, for the same reason
+     * the spot color is: brightness_pct can change at any time, so the
+     * caller's value has to survive in order to be re-scaled. */
+    uint16_t spot_size;
+    uint8_t amb_r, amb_g, amb_b;
+    uint8_t scaled_amb_r, scaled_amb_g, scaled_amb_b;
+    uint16_t last_spot_pos;
+
     uint8_t last_r, last_g, last_b;
     bool dirty;
 } led_group_t;
@@ -62,6 +73,16 @@ void led_group_set_color(led_group_t *group, uint8_t r, uint8_t g, uint8_t b);
 void led_group_set_brightness_pct(led_group_t *group, uint8_t pct);
 void led_group_set_period_ticks(led_group_t *group, uint32_t period_ticks);
 void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_ticks);
+
+/* LED_GROUP_SPOT: the spot's own color is the group's base color (set with
+ * led_group_set_color, so brightness_pct scales it like every other
+ * state); this adds the ambient background the tail fades into, and the
+ * spot's length in pixels including the head. spot_size clamps to the
+ * group's indices_count, and spot_size == 0 means no spot at all - the
+ * group renders pure ambient. Travel speed is period_ticks: one period is
+ * one full traversal of the group. */
+void led_group_set_spot(led_group_t *group, uint16_t spot_size,
+                         uint8_t amb_r, uint8_t amb_g, uint8_t amb_b);
 
 void led_group_set_state(led_group_t *group, led_group_state_t state);
 led_group_state_t led_group_get_state(const led_group_t *group);

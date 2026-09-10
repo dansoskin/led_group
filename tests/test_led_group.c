@@ -138,6 +138,45 @@ static void test_brightness_does_not_compound_on_repeated_calls(void)
     assert(group.scaled_r == 200 && group.scaled_g == 100 && group.scaled_b == 50);
 }
 
+static void test_set_spot_stores_size_and_scales_ambient(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 4);
+    assert(group.spot_size == 0);
+    assert(group.amb_r == 0 && group.amb_g == 0 && group.amb_b == 0);
+    assert(group.scaled_amb_r == 0 && group.scaled_amb_g == 0 &&
+           group.scaled_amb_b == 0);
+    assert(group.last_spot_pos == 0);
+
+    led_group_set_spot(&group, 2, 200, 100, 50);
+    assert(group.spot_size == 2);
+    assert(group.amb_r == 200 && group.amb_g == 100 && group.amb_b == 50);
+    /* brightness defaults to 100, so scaled == base */
+    assert(group.scaled_amb_r == 200 && group.scaled_amb_g == 100 &&
+           group.scaled_amb_b == 50);
+
+    /* The ambient color is brightness-scaled exactly like the spot color,
+     * and recomputed from the untouched base every time so it cannot
+     * compound - the same bug class as the spot color's regression test
+     * above. */
+    led_group_set_brightness_pct(&group, 50);
+    assert(group.scaled_amb_r == 100 && group.scaled_amb_g == 50 &&
+           group.scaled_amb_b == 25);
+    led_group_set_brightness_pct(&group, 50);
+    assert(group.scaled_amb_r == 100 && group.scaled_amb_g == 50 &&
+           group.scaled_amb_b == 25);
+
+    /* A size past the end of the group clamps to the group's length, so a
+     * wrapped spot can never overlap its own tail. */
+    led_group_set_spot(&group, 99, 0, 0, 0);
+    assert(group.spot_size == 4);
+}
+
 static void test_breathing_follows_lut_and_wraps_at_period_boundary(void)
 {
     call_recorder_t rec;
@@ -304,6 +343,7 @@ int main(void)
     test_off_writes_black_once_via_dirty_flag();
     test_on_writes_scaled_color_and_fans_out_to_all_indices();
     test_brightness_does_not_compound_on_repeated_calls();
+    test_set_spot_stores_size_and_scales_ambient();
     test_breathing_follows_lut_and_wraps_at_period_boundary();
     test_periodic_effects_are_synced_across_groups();
     test_blink_code_bursts_pauses_and_repeats();
