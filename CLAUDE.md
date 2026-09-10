@@ -115,8 +115,9 @@ those repos from here; they're separate projects.
 
 ## Not yet decided / not done
 - Remote is configured (`https://github.com/dansoskin/led_group.git`).
-  As of 2026-09-10 `master` carries the spot spec and plan, and the
-  implementation sits on the unpushed `feature/spot-state` branch.
+  As of 2026-09-10 the LED_GROUP_SPOT work is merged into local `master`
+  (spec, plan, 5 implementation commits, and the merge), but `master` has
+  NOT been pushed - it is 9 commits ahead of `origin/master`.
 - No LICENSE or README.
 - Wiring this library back into biostaq_dispenser/cannadorf_v2 (adding it as
   a submodule, rewriting `leds.cpp`/`leds.h` to use it) is explicitly out of
