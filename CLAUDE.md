@@ -32,9 +32,18 @@ so it can be reused as a git submodule across multiple embedded projects
 - SPOT is the one state that is NOT a single uniform color per group: a
   bright spot travels the group in `indices` array order, wrapping at the
   end, trailing a linearly-fading tail into an ambient background. It
-  therefore has its own render path (`led_group_render_spot()`, reached by
-  a branch at the top of `led_group_update()`) and its own change
-  detection — head position, not resolved color. Its color is the group's
+  therefore the reason `led_group_effective_color()` takes a pixel index:
+  every state resolves through that one function, the four uniform states
+  ignore the index, and `led_group_update()` calls it once per pixel.
+  (Refactored 2026-09-10 from an earlier `led_group_render_spot()` that
+  sat outside `effective_color` — see the spec amendment. Net effect was
+  76 bytes LESS flash.) Change detection is the one place the two shapes
+  still differ: a uniform state is described by pixel 0's resolved color,
+  while the spot also needs its head position, since a pixel far from the
+  spot holds the ambient color for many ticks while the strip is moving.
+  `led_group_spot_pos()` returns 0 for every non-SPOT state, so
+  `update()` folds position into the comparison unconditionally without
+  ever triggering a spurious rewrite. Its color is the group's
   base color and its speed is `period_ticks` (one period = one full
   traversal), so `set_spot` only carries the ambient color and the size.
 - The dirty flag is set by EVERY setter and by `led_group_set_state()`,
