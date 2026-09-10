@@ -10,6 +10,7 @@
 
 #define COLOR_READY 0, 255, 0
 #define COLOR_ERROR 255, 0, 0
+#define COLOR_AMBIENT 8, 8, 8
 
 /* Stands in for a real driver callback (e.g. one that calls FastLED's
  * `leds[index] = CRGB(r, g, b)` or Adafruit_NeoPixel's
@@ -26,12 +27,15 @@ int main(void)
 
     static const uint16_t status_indices[] = { 0 };
     static const uint16_t error_indices[] = { 1, 2 };
+    static const uint16_t bar_indices[] = { 3, 4, 5, 6, 7, 8, 9, 10 };
 
     led_group_t status_led;
     led_group_t error_led;
+    led_group_t bar_leds;
 
     led_group_init(&status_led, &strip, status_indices, 1);
     led_group_init(&error_led, &strip, error_indices, 2);
+    led_group_init(&bar_leds, &strip, bar_indices, 8);
 
     /* Status LED breathes green to show the device is idle and ready.
      * Durations are in ticks: at a 10ms rendering cadence, 200 ticks = 2s. */
@@ -46,6 +50,18 @@ int main(void)
     led_group_set_blink_code(&error_led, 2, 100);
     led_group_set_state(&error_led, LED_GROUP_BLINK_CODE);
 
+    /* An 8-pixel bar with a green spot running along it, trailing a tail
+     * that fades into a dim ambient background. All four calls matter:
+     * the spot's own color is the group's base color, and its speed is
+     * the shared period, so set_color and set_period_ticks are just as
+     * required as set_spot - and are the two easiest to forget. One
+     * period is one full lap, so 80 ticks over 8 pixels is 10 ticks per
+     * pixel. */
+    led_group_set_color(&bar_leds, COLOR_READY);
+    led_group_set_spot(&bar_leds, 4, COLOR_AMBIENT);
+    led_group_set_period_ticks(&bar_leds, 80);
+    led_group_set_state(&bar_leds, LED_GROUP_SPOT);
+
     /* The library has no clock - led_group_tick(), called once per rendering
      * pass, is its only view of time. On hardware the loop below would run
      * every 10ms; here it just runs flat out. */
@@ -55,6 +71,7 @@ int main(void)
         }
         led_group_update(&status_led);
         led_group_update(&error_led);
+        led_group_update(&bar_leds);
         led_group_tick();
     }
 

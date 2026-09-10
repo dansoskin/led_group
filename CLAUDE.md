@@ -1,11 +1,11 @@
 # led_group
 
-Status: implemented — all 5 effect states complete, tested, and reviewed.
+Status: implemented — all 6 effect states complete, tested, and reviewed.
 
 ## What this is
 A small, dependency-free C library for independently controlling named
-groups of LEDs on an addressable strip (off/on/breathing/blink/blink-code
-effects). Extracted from `LightenObject` in the biostaq_dispenser project
+groups of LEDs on an addressable strip (off/on/breathing/blink/blink-code/
+running-spot effects). Extracted from `LightenObject` in the biostaq_dispenser project
 so it can be reused as a git submodule across multiple embedded projects
 (PlatformIO/Arduino and plain CMake).
 
@@ -13,18 +13,40 @@ so it can be reused as a git submodule across multiple embedded projects
 - Design spec: `docs/superpowers/specs/2026-08-12-led-group-design.md` —
   read this first. It has the full data model, API, effect semantics, and
   the reasoning behind each decision (e.g. why brightness/base color are
-  stored separately, why the breathing LUT is integer not float).
+  stored separately, why the breathing LUT is integer not float). The
+  LED_GROUP_SPOT state added later has its own spec,
+  `docs/superpowers/specs/2026-09-10-led-group-spot-design.md`.
 - Implementation plan: `docs/superpowers/plans/2026-08-12-led-group-implementation.md`
   — the 9-task breakdown that was followed, via `subagent-driven-development`
   with a spec-compliance review and a code-quality review after every task,
   plus a final holistic review across the whole implementation.
+  LED_GROUP_SPOT followed `docs/superpowers/plans/2026-09-10-led-group-spot.md`
+  (5 TDD tasks, executed inline).
 - `include/led_group.h` + `src/led_group.c` implement the full API: `tick`,
   `init`, `set_color`, `set_brightness_pct`, `set_period_ticks`,
-  `set_blink_code`, `set_state`/`get_state`, `update`. All 5 states
-  (OFF/ON/BREATHING/BLINK/BLINK_CODE) are real, including the `breathe_lut`
-  integer lookup table and the dirty-flag/write-only-on-change logic. The
-  historical compounding-brightness bug from the original `LightenObject`
-  is fixed and regression-tested.
+  `set_blink_code`, `set_spot`, `set_state`/`get_state`, `update`. All 6
+  states (OFF/ON/BREATHING/BLINK/BLINK_CODE/SPOT) are real, including the
+  `breathe_lut` integer lookup table and the dirty-flag/write-only-on-change
+  logic. The historical compounding-brightness bug from the original
+  `LightenObject` is fixed and regression-tested.
+- SPOT is the one state that is NOT a single uniform color per group: a
+  bright spot travels the group in `indices` array order, wrapping at the
+  end, trailing a linearly-fading tail into an ambient background. It
+  therefore has its own render path (`led_group_render_spot()`, reached by
+  a branch at the top of `led_group_update()`) and its own change
+  detection — head position, not resolved color. Its color is the group's
+  base color and its speed is `period_ticks` (one period = one full
+  traversal), so `set_spot` only carries the ambient color and the size.
+- The dirty flag is set by EVERY setter and by `led_group_set_state()`,
+  not just by `init` (changed 2026-09-10). The uniform states never needed
+  that — their `last_r`/`last_g`/`last_b` comparison catches any change —
+  but the spot path compares head position, so entering SPOT while the
+  head sits at position 0 rendered nothing and left the strip black. A
+  flat "any mutation marks the group dirty" invariant fixes that with no
+  per-state exception, and also covers SPOT -> ON, where
+  `last_r`/`last_g`/`last_b` are stale because the spot path never
+  maintains them. Cost to the uniform states is at most one redundant
+  rewrite of identical values.
 - The library has NO clock (changed 2026-08-13 for the cannadorf_v2
   integration, replacing a briefly-lived `attach_ms_timer` design): time is
   a shared tick counter advanced by calling `led_group_tick()` once per
@@ -35,8 +57,11 @@ so it can be reused as a git submodule across multiple embedded projects
   so all groups with the same period pulse in lockstep regardless of when
   each entered its state; BLINK_CODE anchors to state entry so an error
   code always plays from its first blink.
-- `tests/test_led_group.c` has one assert-based test per case in the spec's
-  testing plan plus sync/anchor coverage (7 tests total), run via CTest.
+- `tests/test_led_group.c` has one assert-based test per case in the specs'
+  testing plans plus sync/anchor coverage (13 tests total), run via CTest.
+  The 6 spot tests pin exact per-pixel RGB values; those were derived from
+  the weight/blend formulas in the spot spec before the code was run, so a
+  failure there means the implementation drifted, not the expectation.
   The tick counter is process-global and never reset, so tests mirror it
   through an `advance()` helper and align to phase 0 before asserting exact
   LUT values.
@@ -59,6 +84,18 @@ so it can be reused as a git submodule across multiple embedded projects
   merge, confirming every manual trace done while it was blocked was
   accurate. If a future session hits vanishing/`Permission denied` `.exe`s
   again, that's the same known issue, not a new code bug.
+- That false positive DID resurface on 2026-09-10, and the shape of it is
+  worth knowing: the CMake-built `build/tests/led_group_tests.exe` runs
+  fine and can be relinked and rerun freely, but a freshly-linked
+  `led_group_example.exe` is deleted or refuses to exec (`Permission
+  denied`) within a second of linking — reproduced at three paths,
+  including outside the repo, and with an ad-hoc `gcc` build linking
+  `led_group.c` directly. A trivial `hello.c` binary is untouched, so it
+  keys on something about this library's binaries rather than on new
+  binaries generally. Workaround: verify through the test binary (which
+  runs) rather than the example. The example's exact configuration was
+  checked that way — a temporary assertion block in
+  `tests/test_led_group.c`, run under `ctest`, then reverted.
 - Two minor, explicitly non-blocking follow-ups noted by the final review
   (optional, not scheduled): (1) `led_group_effective_color()` has some
   duplicated guard/phase-check logic across the BLINK/BLINK_CODE/BREATHING
@@ -77,10 +114,15 @@ percentages, verified byte-for-byte against the original table). Do not edit
 those repos from here; they're separate projects.
 
 ## Not yet decided / not done
-- Remote is configured (`https://github.com/dansoskin/led_group.git`) and
-  `master` is pushed and up to date.
+- Remote is configured (`https://github.com/dansoskin/led_group.git`).
+  As of 2026-09-10 `master` carries the spot spec and plan, and the
+  implementation sits on the unpushed `feature/spot-state` branch.
 - No LICENSE or README.
 - Wiring this library back into biostaq_dispenser/cannadorf_v2 (adding it as
   a submodule, rewriting `leds.cpp`/`leds.h` to use it) is explicitly out of
   scope for this repo per the spec — a separate follow-up task in those
   repos.
+- Likewise, switching `164_traps_motor`'s `Core/Src/leds.c` from BREATHING
+  to the new LED_GROUP_SPOT state is a change in that project, not here.
+  Its 40-LED strip and in-order `all_indices[i] = i` are exactly the
+  layout the spot was designed against.
