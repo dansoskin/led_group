@@ -15,16 +15,21 @@ typedef enum {
     LED_GROUP_BREATHING,
     LED_GROUP_BLINK,
     LED_GROUP_BLINK_CODE,
-    LED_GROUP_SPOT,
+    /* The four moving effects. A lit run of led_group_set_spot()'s size
+     * travels along the group's indices array, wrapping at the end, over
+     * that call's ambient background. FORWARD runs toward increasing array
+     * positions, BACKWARD toward decreasing ones, and in both cases the
+     * run's body trails behind its leading pixel.
+     *
+     * SPOT is brightest in its middle and fades toward both of its ends,
+     * so it looks the same whichever way it travels. COMET is brightest at
+     * its leading pixel and fades backward along its tail, so its
+     * direction is visible in its shape. */
+    LED_GROUP_SPOT_FORWARD,
+    LED_GROUP_SPOT_BACKWARD,
+    LED_GROUP_COMET_FORWARD,
+    LED_GROUP_COMET_BACKWARD,
 } led_group_state_t;
-
-/* Which way a LED_GROUP_SPOT travels along the group's indices array.
- * FORWARD is 0, so a group that never calls led_group_set_spot_direction()
- * keeps the original behavior. */
-typedef enum {
-    LED_GROUP_SPOT_FORWARD,   /* toward increasing array positions */
-    LED_GROUP_SPOT_REVERSE,   /* toward decreasing array positions */
-} led_group_spot_dir_t;
 
 typedef void (*led_group_write_pixel_fn)(uint16_t index, uint8_t r, uint8_t g,
                                           uint8_t b, void *ctx);
@@ -52,15 +57,15 @@ typedef struct {
     uint8_t blink_code_count;
     uint32_t blink_code_pause_ticks;
 
-    /* LED_GROUP_SPOT only. The spot's own color is the group's base
-     * color; these are the background it fades into and its length.
-     * Ambient is kept both as given and pre-scaled, for the same reason
-     * the spot color is: brightness_pct can change at any time, so the
-     * caller's value has to survive in order to be re-scaled. */
+    /* The four moving states only (SPOT and COMET, either direction). The
+     * run's own color is the group's base color; these are the background
+     * it fades into and the run's length. Ambient is kept both as given
+     * and pre-scaled, for the same reason the base color is:
+     * brightness_pct can change at any time, so the caller's value has to
+     * survive in order to be re-scaled. */
     uint16_t spot_size;
     uint8_t amb_r, amb_g, amb_b;
     uint8_t scaled_amb_r, scaled_amb_g, scaled_amb_b;
-    led_group_spot_dir_t spot_dir;
     uint16_t last_spot_pos;
 
     uint8_t last_r, last_g, last_b;
@@ -86,27 +91,23 @@ void led_group_set_brightness_pct(led_group_t *group, uint8_t pct);
 void led_group_set_period_ticks(led_group_t *group, uint32_t period_ticks);
 void led_group_set_blink_code(led_group_t *group, uint8_t count, uint32_t pause_ticks);
 
-/* LED_GROUP_SPOT: the spot's own color is the group's base color (set with
- * led_group_set_color, so brightness_pct scales it like every other
- * state); this adds the ambient background the spot fades into, and the
- * spot's length in pixels. spot_size clamps to the group's indices_count,
- * and spot_size == 0 means no spot at all - the group renders pure
- * ambient. Travel speed is period_ticks: one period is one full traversal
- * of the group.
+/* Configures all four moving states (SPOT and COMET, either direction).
+ * The moving run's own color is the group's base color, set with
+ * led_group_set_color, so brightness_pct scales it like every other state;
+ * this call adds the length of the run in pixels and the ambient
+ * background it fades into. Travel speed is period_ticks: one period is
+ * one full traversal of the group.
  *
- * The spot is brightest in its middle and fades symmetrically toward both
- * ends, so it reads the same whichever way it travels. An even spot_size
- * has no single middle pixel, so the peak plateaus across the middle two.
- * The end pixels never reach the ambient color exactly, which keeps the
- * spot's edges visible against the background. */
+ * spot_size clamps to the group's indices_count, so a wrapped run can
+ * never overlap its own tail. spot_size == 0 means no run at all - the
+ * group renders pure ambient.
+ *
+ * In both shapes the dimmest pixel of the run never reaches the ambient
+ * color exactly, which keeps the run's edges visible against the
+ * background. For SPOT, an even spot_size has no single middle pixel, so
+ * its peak plateaus across the middle two. */
 void led_group_set_spot(led_group_t *group, uint16_t spot_size,
                          uint8_t amb_r, uint8_t amb_g, uint8_t amb_b);
-
-/* Which way the spot travels. Defaults to LED_GROUP_SPOT_FORWARD, and can
- * be changed at any time - the spot jumps to its mirrored position on the
- * next update rather than easing round, since position is derived from the
- * shared tick counter rather than accumulated. */
-void led_group_set_spot_direction(led_group_t *group, led_group_spot_dir_t dir);
 
 void led_group_set_state(led_group_t *group, led_group_state_t state);
 led_group_state_t led_group_get_state(const led_group_t *group);
