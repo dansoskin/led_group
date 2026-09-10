@@ -241,7 +241,7 @@ static void test_spot_travels_in_index_order_and_wraps(void)
     assert_pixel(&rec, 16 + 7, 7, 20, 20, 20);
 }
 
-static void test_spot_tail_fades_linearly_into_ambient(void)
+static void test_spot_even_size_plateaus_across_the_middle(void)
 {
     call_recorder_t rec;
     recorder_reset(&rec);
@@ -261,22 +261,107 @@ static void test_spot_tail_fades_linearly_into_ambient(void)
     led_group_set_state(&group, LED_GROUP_SPOT);
     recorder_reset(&rec);
 
-    /* pos 5, size 4 -> the spot covers 5 (head), 4, 3, 2 with weights
-     * 100, 75, 50, 25; indices 6, 7, 0, 1 are ambient. Values come from
-     * out = (spot * w + ambient * (100 - w)) / 100 per channel. */
+    /* pos 5, size 4 -> the spot covers positions 5, 4, 3, 2. The profile is
+     * symmetric about the middle, and size 4 has no single middle pixel, so
+     * the peak plateaus across the middle two: weights 50, 100, 100, 50.
+     * Values come from out = (spot * w + ambient * (100 - w)) / 100 per
+     * channel. */
     led_group_update(&group);
     assert(rec.count == 8);
     assert_pixel(&rec, 0, 0, 20, 20, 20);
     assert_pixel(&rec, 1, 1, 20, 20, 20);
-    assert_pixel(&rec, 2, 2, 15, 78, 15);   /* offset 3, w = 25 */
-    assert_pixel(&rec, 3, 3, 10, 137, 10);  /* offset 2, w = 50 */
-    assert_pixel(&rec, 4, 4, 5, 196, 5);    /* offset 1, w = 75 */
-    assert_pixel(&rec, 5, 5, 0, 255, 0);    /* offset 0, head */
+    assert_pixel(&rec, 2, 2, 10, 137, 10);  /* offset 3, end,    w = 50 */
+    assert_pixel(&rec, 3, 3, 0, 255, 0);    /* offset 2, middle, w = 100 */
+    assert_pixel(&rec, 4, 4, 0, 255, 0);    /* offset 1, middle, w = 100 */
+    assert_pixel(&rec, 5, 5, 10, 137, 10);  /* offset 0, end,    w = 50 */
     assert_pixel(&rec, 6, 6, 20, 20, 20);
     assert_pixel(&rec, 7, 7, 20, 20, 20);
 }
 
-static void test_spot_tail_spans_the_wrap_seam(void)
+/* An odd spot_size has a single middle pixel, which must land on exactly
+ * the full spot color rather than near it. */
+static void test_spot_odd_size_peaks_on_one_middle_pixel(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_spot(&group, 5, 20, 20, 20);
+    led_group_set_period_ticks(&group, 8);
+
+    align_to_phase0(8);
+    advance(6);
+    led_group_set_state(&group, LED_GROUP_SPOT);
+    recorder_reset(&rec);
+
+    /* pos 6, size 5 -> positions 6, 5, 4, 3, 2 at weights 33, 66, 100,
+     * 66, 33, so the middle pixel is index 4. */
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 0, 0, 20, 20, 20);
+    assert_pixel(&rec, 1, 1, 20, 20, 20);
+    assert_pixel(&rec, 2, 2, 13, 97, 13);   /* offset 4, end,    w = 33 */
+    assert_pixel(&rec, 3, 3, 6, 175, 6);    /* offset 3,         w = 66 */
+    assert_pixel(&rec, 4, 4, 0, 255, 0);    /* offset 2, middle, w = 100 */
+    assert_pixel(&rec, 5, 5, 6, 175, 6);    /* offset 1,         w = 66 */
+    assert_pixel(&rec, 6, 6, 13, 97, 13);   /* offset 0, end,    w = 33 */
+    assert_pixel(&rec, 7, 7, 20, 20, 20);
+}
+
+/* Direction only mirrors the position; the symmetric profile means the
+ * spot looks identical either way, so this checks which way it moves. */
+static void test_spot_direction_reverses_travel(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 8);
+    led_group_update(&group); /* consume the initial OFF dirty write */
+
+    led_group_set_color(&group, 0, 255, 0);
+    led_group_set_spot(&group, 1, 20, 20, 20); /* size 1 -> head only */
+    led_group_set_period_ticks(&group, 8);
+    assert(group.spot_dir == LED_GROUP_SPOT_FORWARD); /* the default */
+
+    led_group_set_spot_direction(&group, LED_GROUP_SPOT_REVERSE);
+    align_to_phase0(8);
+    advance(1);
+    led_group_set_state(&group, LED_GROUP_SPOT);
+    recorder_reset(&rec);
+
+    /* Reverse mirrors the position: phase 1 forward would be position 1,
+     * so reversed it is 8 - 1 - 1 = 6. */
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 6, 6, 0, 255, 0);
+    assert_pixel(&rec, 1, 1, 20, 20, 20);
+
+    /* One tick later the spot has moved DOWN one position, not up. */
+    advance(1);
+    led_group_update(&group);
+    assert(rec.count == 16);
+    assert_pixel(&rec, 8 + 5, 5, 0, 255, 0);
+    assert_pixel(&rec, 8 + 6, 6, 20, 20, 20);
+
+    /* Switching back to forward mirrors it again, on the same tick. */
+    led_group_set_spot_direction(&group, LED_GROUP_SPOT_FORWARD);
+    recorder_reset(&rec);
+    led_group_update(&group);
+    assert(rec.count == 8);
+    assert_pixel(&rec, 2, 2, 0, 255, 0);
+    assert_pixel(&rec, 5, 5, 20, 20, 20);
+}
+
+static void test_spot_spans_the_wrap_seam(void)
 {
     call_recorder_t rec;
     recorder_reset(&rec);
@@ -291,24 +376,25 @@ static void test_spot_tail_spans_the_wrap_seam(void)
     led_group_set_spot(&group, 3, 20, 20, 20);
     led_group_set_period_ticks(&group, 8);
 
-    /* The tail runs to lower positions, so the seam is crossed when the
-     * head is near the START of the group: head at 1 covers 1, 0, 7. */
+    /* The spot spans positions pos, pos-1, pos-2, so the seam is crossed
+     * when pos is near the START of the group: pos 1 covers 1, 0, 7. */
     align_to_phase0(8);
     advance(1);
     led_group_set_state(&group, LED_GROUP_SPOT);
     recorder_reset(&rec);
 
-    /* size 3 -> weights 100, 66, 33. */
+    /* size 3 -> weights 50, 100, 50, so the middle pixel lands on index 0
+     * and the two dim ends straddle the seam at indices 1 and 7. */
     led_group_update(&group);
     assert(rec.count == 8);
-    assert_pixel(&rec, 0, 0, 6, 175, 6);    /* offset 1, w = 66 */
-    assert_pixel(&rec, 1, 1, 0, 255, 0);    /* offset 0, head */
+    assert_pixel(&rec, 0, 0, 0, 255, 0);    /* offset 1, middle, w = 100 */
+    assert_pixel(&rec, 1, 1, 10, 137, 10);  /* offset 0, end,    w = 50 */
     assert_pixel(&rec, 2, 2, 20, 20, 20);
     assert_pixel(&rec, 3, 3, 20, 20, 20);
     assert_pixel(&rec, 4, 4, 20, 20, 20);
     assert_pixel(&rec, 5, 5, 20, 20, 20);
     assert_pixel(&rec, 6, 6, 20, 20, 20);
-    assert_pixel(&rec, 7, 7, 13, 97, 13);   /* offset 2, w = 33 */
+    assert_pixel(&rec, 7, 7, 10, 137, 10);  /* offset 2, end,    w = 50 */
 }
 
 static void test_spot_degenerate_sizes_and_brightness(void)
@@ -563,8 +649,10 @@ int main(void)
     test_brightness_does_not_compound_on_repeated_calls();
     test_set_spot_stores_size_and_scales_ambient();
     test_spot_travels_in_index_order_and_wraps();
-    test_spot_tail_fades_linearly_into_ambient();
-    test_spot_tail_spans_the_wrap_seam();
+    test_spot_even_size_plateaus_across_the_middle();
+    test_spot_spans_the_wrap_seam();
+    test_spot_odd_size_peaks_on_one_middle_pixel();
+    test_spot_direction_reverses_travel();
     test_spot_degenerate_sizes_and_brightness();
     test_entering_spot_at_position_zero_repaints();
     test_breathing_follows_lut_and_wraps_at_period_boundary();

@@ -24,15 +24,30 @@ so it can be reused as a git submodule across multiple embedded projects
   (5 TDD tasks, executed inline).
 - `include/led_group.h` + `src/led_group.c` implement the full API: `tick`,
   `init`, `set_color`, `set_brightness_pct`, `set_period_ticks`,
-  `set_blink_code`, `set_spot`, `set_state`/`get_state`, `update`. All 6
+  `set_blink_code`, `set_spot`, `set_spot_direction`,
+  `set_state`/`get_state`, `update`. All 6
   states (OFF/ON/BREATHING/BLINK/BLINK_CODE/SPOT) are real, including the
   `breathe_lut` integer lookup table and the dirty-flag/write-only-on-change
   logic. The historical compounding-brightness bug from the original
   `LightenObject` is fixed and regression-tested.
 - SPOT is the one state that is NOT a single uniform color per group: a
   bright spot travels the group in `indices` array order, wrapping at the
-  end, trailing a linearly-fading tail into an ambient background. It
-  therefore the reason `led_group_effective_color()` takes a pixel index:
+  end, over an ambient background. It is brightest in its MIDDLE and fades
+  symmetrically toward both of its ends (changed 2026-09-10 from an
+  original bright-head/fading-tail comet), so it reads the same whichever
+  way it moves — and it can move either way, via
+  `led_group_set_spot_direction()` with `led_group_spot_dir_t`
+  (FORWARD is 0, so groups that never call it keep the original travel).
+  Because the profile is symmetric, direction only mirrors the position;
+  it does not touch the weights. The weight math is integer and works in
+  DOUBLED distances so an even spot_size — whose middle falls between two
+  pixels — stays exact; an even size therefore plateaus its peak across
+  the middle two pixels. Verified exhaustively for sizes 1-200: the peak
+  is always exactly 100 and the ends never reach 0, which also matters
+  because `led_group_blend()` computes `100 - w` unsigned and would
+  underflow if a weight ever exceeded 100.
+  That per-pixel nature is why `led_group_effective_color()` takes a
+  pixel index:
   every state resolves through that one function, the four uniform states
   ignore the index, and `led_group_update()` calls it once per pixel.
   (Refactored 2026-09-10 from an earlier `led_group_render_spot()` that
@@ -67,8 +82,8 @@ so it can be reused as a git submodule across multiple embedded projects
   each entered its state; BLINK_CODE anchors to state entry so an error
   code always plays from its first blink.
 - `tests/test_led_group.c` has one assert-based test per case in the specs'
-  testing plans plus sync/anchor coverage (13 tests total), run via CTest.
-  The 6 spot tests pin exact per-pixel RGB values; those were derived from
+  testing plans plus sync/anchor coverage (15 tests total), run via CTest.
+  The 8 spot tests pin exact per-pixel RGB values; those were derived from
   the weight/blend formulas in the spot spec before the code was run, so a
   failure there means the implementation drifted, not the expectation.
   The tick counter is process-global and never reset, so tests mirror it
