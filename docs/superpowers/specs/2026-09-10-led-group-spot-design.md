@@ -147,13 +147,15 @@ The blend uses the brightness-scaled spot and ambient values, and
 Consequences worth stating explicitly:
 
 - `spot_size = 4` gives weights `100, 75, 50, 25`. With spot green
-  `(0,255,0)` on ambient `(20,20,20)`, offset 1 renders `(15,196,15)`.
+  `(0,255,0)` on ambient `(20,20,20)`, offset 1 renders `(5,196,5)`.
 - `spot_size = 1` gives a single pixel at weight 100 - a hard spot, no
   tail. The comet degenerates gracefully rather than dividing by zero.
 - The tail's last pixel is never exactly ambient (its weight is
   `100/spot_size`, not 0), so the trailing edge stays visible.
-- The spot spans the seam on wrap: with `count = 8` and `spot_size = 3`,
-  a head at position 7 lights 7 (head), 0, and 1.
+- The spot spans the seam on wrap when the head is near the *start* of
+  the group, since the tail runs to lower positions: with `count = 8` and
+  `spot_size = 3`, a head at position 1 lights 1 (head), 0, and 7. A head
+  at position 7 lights 7, 6, 5 and crosses nothing.
 
 ### Render path and change detection
 
@@ -201,7 +203,7 @@ exact - no approximate comparisons.
 1. **Comet profile.** Head at full spot color, tail weights falling
    linearly, ambient on every pixel outside the spot.
 2. **Travel and wrap.** Position advances with ticks, wraps at the end of
-   the group, and the spot spans the seam (head at 7 lights 7, 0, 1).
+   the group, and the spot spans the seam (head at 1 lights 1, 0, 7).
 3. **Degenerate sizes.** `spot_size = 0` renders pure ambient;
    `spot_size = 1` renders a hard single-pixel spot with no tail.
 4. **Brightness scaling.** `brightness_pct` scales the spot *and* the
