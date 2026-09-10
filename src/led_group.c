@@ -2,10 +2,6 @@
 
 #define BREATHE_LUT_SIZE 200
 
-/* Ported from biostaq_dispenser/cannadorf_v2's `effect1` float table
- * (0.0-1.0), converted to uint8_t percentages (0-100). See
- * docs/superpowers/specs/2026-08-12-led-group-design.md for why this is an
- * integer LUT rather than float. */
 static const uint8_t breathe_lut[BREATHE_LUT_SIZE] = {
     4,5,5,5,6,6,6,7,7,7,8,8,9,9,10,10,11,11,12,13,13,14,15,16,16,17,18,19,20,20,21,22,23,24,25,26,28,29,30,31,32,33,35,36,
     37,38,40,41,43,44,45,47,48,50,51,53,54,56,57,59,60,62,63,65,66,68,69,70,72,73,75,76,77,79,80,81,83,84,85,86,87,88,89,90,91,92,93,94,
@@ -127,25 +123,15 @@ led_group_state_t led_group_get_state(const led_group_t *group)
     return group->state;
 }
 
-/* Blend fg toward bg by an integer percentage: w == 100 is pure fg,
- * w == 0 pure bg. The uint16_t intermediates keep the products in range
- * (the worst case is 255 * 100 == 25500). Callers must pass w <= 100,
- * which the weight formula in the SPOT case below guarantees. */
 static uint8_t led_group_blend(uint8_t fg, uint8_t bg, uint8_t w)
 {
+    /* Blend fg toward bg by an integer percentage: w == 100 is pure fg,
+    * w == 0 pure bg. The uint16_t intermediates keep the products in range
+    * (the worst case is 255 * 100 == 25500). Callers must pass w <= 100,
+    * which the weight formula in the SPOT case below guarantees. */
     return (uint8_t)(((uint16_t)fg * w + (uint16_t)bg * (uint8_t)(100 - w)) / 100);
 }
 
-/* The spot head's position within the group's indices array. Phase derives
- * from the shared tick counter, like BREATHING/BLINK, so groups sharing a
- * period travel in lockstep, and period_ticks is guarded against 0 the same
- * way. One period is one full traversal of the group.
- *
- * Returns 0 for every state other than SPOT. That is what lets
- * led_group_update() fold the head position into its change detection
- * unconditionally: for a uniform state the position is always 0, so it
- * always compares equal and can never trigger a spurious rewrite. */
-/* The four states whose lit run travels along the group. */
 static bool led_group_state_is_moving(led_group_state_t state)
 {
     return state == LED_GROUP_SPOT_FORWARD ||
@@ -160,8 +146,6 @@ static bool led_group_state_is_backward(led_group_state_t state)
            state == LED_GROUP_COMET_BACKWARD;
 }
 
-/* COMET peaks at its leading pixel and fades back along its tail; SPOT
- * peaks in its middle and fades toward both ends. */
 static bool led_group_state_is_comet(led_group_state_t state)
 {
     return state == LED_GROUP_COMET_FORWARD ||
@@ -194,11 +178,7 @@ static uint16_t led_group_spot_pos(const led_group_t *group)
     return pos;
 }
 
-/* The color of a single pixel, identified by its position in the group's
- * indices array. Every state resolves through here. The four uniform
- * states ignore the index - their answer is the same for every pixel in
- * the group - but SPOT is per-pixel, which is why the index is a
- * parameter at all. */
+
 static void led_group_effective_color(const led_group_t *group, uint16_t i,
                                        uint8_t *out_r, uint8_t *out_g, uint8_t *out_b)
 {
@@ -363,19 +343,10 @@ void led_group_update(led_group_t *group)
     uint16_t pos;
     uint16_t i;
 
-    /* Nothing to render, and it is also what keeps the SPOT case's modulo
-     * safe against a zero-length group. */
     if (group->indices_count == 0) {
         return;
     }
 
-    /* Change detection has to cover both shapes of effect. A uniform state
-     * is fully described by its resolved color, so pixel 0's color speaks
-     * for the whole group. The spot needs its head position as well: while
-     * the spot sits away from pixel 0 that pixel stays at the ambient
-     * color for many ticks, even though the strip as a whole changes every
-     * few ticks. For a uniform state the position is always 0 (see
-     * led_group_spot_pos), so including it costs nothing. */
     pos = led_group_spot_pos(group);
     led_group_effective_color(group, 0, &probe_r, &probe_g, &probe_b);
 
