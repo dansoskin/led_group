@@ -60,6 +60,11 @@ typedef struct {
 
 void led_group_tick(void);
 
+/* Overwrites the shared tick counter, e.g. from a CAN SYNC, so every board
+ * phases its effects off the same value. A backward jump glitches a
+ * BLINK_CODE already in progress, since it anchors to state entry. */
+void led_group_sync_tick(uint32_t ticks);
+
 void led_group_init(led_group_t *group, const led_strip_t *strip,
                      const uint16_t *indices, uint16_t indices_count);
 

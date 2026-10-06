@@ -19,6 +19,11 @@ void led_group_tick(void)
     s_ticks++;
 }
 
+void led_group_sync_tick(uint32_t ticks)
+{
+    s_ticks = ticks;
+}
+
 static void led_group_recompute_scaled(led_group_t *group)
 {
     group->scaled_r = (uint8_t)((uint16_t)group->base_r * group->brightness_pct / 100);
