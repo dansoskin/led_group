@@ -5,6 +5,29 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+/* Shared palette as "r, g, b" lists, so they drop straight into
+ * led_group_set_color() and led_group_set_spot(). Raw values, no gamma
+ * correction: on WS2812-class LEDs green dominates, which is why ORANGE and
+ * YELLOW carry less green than their web equivalents. */
+#define LED_COLOR_OFF         0,   0,   0
+#define LED_COLOR_WHITE     255, 255, 255
+#define LED_COLOR_WARM_WHITE 255, 140,  40
+#define LED_COLOR_DIM_WHITE  20,  20,  20
+#define LED_COLOR_RED       255,   0,   0
+#define LED_COLOR_GREEN       0, 255,   0
+#define LED_COLOR_BLUE        0,   0, 255
+#define LED_COLOR_YELLOW    255, 180,   0
+#define LED_COLOR_ORANGE    255,  60,   0
+#define LED_COLOR_AMBER     255, 110,   0
+#define LED_COLOR_CYAN        0, 255, 255
+#define LED_COLOR_TEAL        0, 180,  90
+#define LED_COLOR_SKY_BLUE    0,  80, 255
+#define LED_COLOR_MAGENTA   255,   0, 255
+#define LED_COLOR_PURPLE    128,   0, 128
+#define LED_COLOR_VIOLET     90,   0, 255
+#define LED_COLOR_PINK      255,  20,  60
+#define LED_COLOR_LIME      120, 255,   0
+
 #ifdef __cplusplus
 extern "C" {
 #endif
