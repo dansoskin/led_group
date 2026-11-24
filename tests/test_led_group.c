@@ -721,6 +721,79 @@ static void test_blink_code_anchors_to_state_entry(void)
     assert(rec.count == 1 && rec.calls[0].r == 80);
 }
 
+static void assert_alternate_pattern(const call_recorder_t *rec,
+                                      const char *pattern)
+{
+    size_t i;
+    for (i = 0; pattern[i]; i++) {
+        if (pattern[i] == 'R') {
+            assert_pixel(rec, i, (uint16_t)i, 255, 0, 0);
+        } else {
+            assert_pixel(rec, i, (uint16_t)i, 255, 255, 255);
+        }
+    }
+    assert(rec->count == i);
+}
+
+static void test_alternate_swaps_blocks_every_half_period(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 6);
+    led_group_set_color(&group, LED_COLOR_RED);
+    led_group_set_spot(&group, 2, LED_COLOR_WHITE);
+    led_group_set_period_ticks(&group, 10);
+    align_to_phase0(10);
+    led_group_set_state(&group, LED_GROUP_ALTERNATE);
+
+    led_group_update(&group);
+    assert_alternate_pattern(&rec, "RRWWRR");
+
+    /* Ticks between swaps write nothing. */
+    recorder_reset(&rec);
+    advance(4);
+    led_group_update(&group);
+    assert(rec.count == 0);
+
+    advance(1); /* phase 5 = half period: every block flips */
+    led_group_update(&group);
+    assert_alternate_pattern(&rec, "WWRRWW");
+
+    recorder_reset(&rec);
+    advance(5); /* full period: back to the start */
+    led_group_update(&group);
+    assert_alternate_pattern(&rec, "RRWWRR");
+}
+
+static void test_alternate_size_one_and_zero_alternate_per_pixel(void)
+{
+    call_recorder_t rec;
+    recorder_reset(&rec);
+    led_strip_t strip = { recording_write_pixel, &rec };
+    static const uint16_t indices[] = { 0, 1, 2, 3, 4, 5 };
+    led_group_t group;
+
+    led_group_init(&group, &strip, indices, 6);
+    led_group_set_color(&group, LED_COLOR_RED);
+    led_group_set_spot(&group, 1, LED_COLOR_WHITE);
+    led_group_set_period_ticks(&group, 10);
+    align_to_phase0(10);
+    led_group_set_state(&group, LED_GROUP_ALTERNATE);
+
+    led_group_update(&group);
+    assert_alternate_pattern(&rec, "RWRWRW");
+
+    /* Size 0 must not divide by zero; it renders as size 1. */
+    recorder_reset(&rec);
+    led_group_set_spot(&group, 0, LED_COLOR_WHITE);
+    led_group_update(&group);
+    assert_alternate_pattern(&rec, "RWRWRW");
+}
+
 int main(void)
 {
     test_off_writes_black_once_via_dirty_flag();
@@ -740,5 +813,7 @@ int main(void)
     test_periodic_effects_are_synced_across_groups();
     test_blink_code_bursts_pauses_and_repeats();
     test_blink_code_anchors_to_state_entry();
+    test_alternate_swaps_blocks_every_half_period();
+    test_alternate_size_one_and_zero_alternate_per_pixel();
     return 0;
 }

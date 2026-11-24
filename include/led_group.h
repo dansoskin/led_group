@@ -42,6 +42,9 @@ typedef enum {
     LED_GROUP_SPOT_BACKWARD,
     LED_GROUP_COMET_FORWARD,
     LED_GROUP_COMET_BACKWARD,
+    /* Blocks of base color and set_spot's ambient color, spot_size pixels
+     * each, swapping places every half period. */
+    LED_GROUP_ALTERNATE,
 } led_group_state_t;
 
 typedef void (*led_group_write_pixel_fn)(uint16_t index, uint8_t r, uint8_t g,

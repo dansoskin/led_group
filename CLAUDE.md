@@ -1,6 +1,6 @@
 # led_group
 
-Status: implemented — all 9 effect states complete, tested, and reviewed.
+Status: implemented — all 10 effect states complete, tested, and reviewed.
 
 ## What this is
 A small, dependency-free C library for independently controlling named
@@ -15,7 +15,7 @@ so it can be reused as a git submodule across multiple embedded projects
   the reasoning behind each decision (e.g. why brightness/base color are
   stored separately, why the breathing LUT is integer not float). The
   LED_GROUP_SPOT state added later has its own spec,
-  `docs/superpowers/specs/2026-09-10-led-group-spot-design.md`.
+  `docs/superpowers/specs/2026-09-10-led-group-spot-design.md`. LED_GROUP_ALTERNATE (two-color blocks of `spot_size`, base + ambient color from `set_spot`, hard-swapping every half period off the shared counter) is in `docs/superpowers/specs/2026-11-24-led-group-alternate-design.md`.
 - Implementation plan: `docs/superpowers/plans/2026-08-12-led-group-implementation.md`
   — the 9-task breakdown that was followed, via `subagent-driven-development`
   with a spec-compliance review and a code-quality review after every task,
@@ -96,7 +96,7 @@ so it can be reused as a git submodule across multiple embedded projects
   each entered its state; BLINK_CODE anchors to state entry so an error
   code always plays from its first blink.
 - `tests/test_led_group.c` has one assert-based test per case in the specs'
-  testing plans plus sync/anchor coverage (17 tests total), run via CTest.
+  testing plans plus sync/anchor coverage (19 tests total), run via CTest.
   The 10 moving-effect tests pin exact per-pixel RGB values; those were derived from
   the weight/blend formulas in the spot spec before the code was run, so a
   failure there means the implementation drifted, not the expectation.

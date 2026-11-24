@@ -333,6 +333,25 @@ static void led_group_effective_color(const led_group_t *group, uint16_t i,
         break;
     }
 
+    case LED_GROUP_ALTERNATE: {
+        /* spot_size defaults to 0 when set_spot() was never called; treat
+         * that as 1 so the division below is safe. Phase is off the shared
+         * counter, like BLINK, so same-period groups swap in lockstep. */
+        uint16_t size = group->spot_size != 0 ? group->spot_size : 1;
+        uint32_t period_ticks = group->period_ticks != 0 ? group->period_ticks : 1;
+        bool swapped = (s_ticks % period_ticks) >= period_ticks / 2;
+        if (((i / size) % 2 == 0) != swapped) {
+            *out_r = group->scaled_r;
+            *out_g = group->scaled_g;
+            *out_b = group->scaled_b;
+        } else {
+            *out_r = group->scaled_amb_r;
+            *out_g = group->scaled_amb_g;
+            *out_b = group->scaled_amb_b;
+        }
+        break;
+    }
+
     case LED_GROUP_OFF:
     default:
         *out_r = 0;
