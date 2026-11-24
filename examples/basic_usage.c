@@ -1,4 +1,4 @@
-/* A runnable tour of everything led_group does, on one 38-LED strip.
+/* A runnable tour of everything led_group does, on one 46-LED strip.
  *
  * This is example consuming-project glue code - what leds.h/leds.c would
  * look like in a project using led_group (see biostaq_dispenser and
@@ -6,7 +6,7 @@
  * groups, project-specific color macros, and the write_pixel callback all
  * live here, in the consuming project - never in the library itself.
  *
- * The strip is carved into nine non-overlapping groups, one per effect
+ * The strip is carved into ten non-overlapping groups, one per effect
  * state, so every state is visible side by side. Each group's setup below
  * carries a short note on what that state does and which setters it needs.
  *
@@ -19,7 +19,7 @@
 
 #include <stdio.h>
 
-#define STRIP_LEN 38
+#define STRIP_LEN 46
 
 /* Project colors. The macros expand to three arguments, which is why they
  * drop straight into set_color and set_spot. */
@@ -27,6 +27,7 @@
 #define COLOR_ERROR   255, 0, 0
 #define COLOR_BLUE    0, 80, 255
 #define COLOR_ORANGE  255, 60, 0
+#define COLOR_WHITE   255, 255, 255
 #define COLOR_AMBIENT 10, 10, 10   /* background for the moving effects */
 
 /* The driver's frame buffer. A real project hands these bytes to FastLED
@@ -72,9 +73,11 @@ int main(void)
     static const uint16_t spot_b_idx[]  = { 14, 15, 16, 17, 18, 19, 20, 21 };
     static const uint16_t comet_f_idx[] = { 22, 23, 24, 25, 26, 27, 28, 29 };
     static const uint16_t comet_b_idx[] = { 30, 31, 32, 33, 34, 35, 36, 37 };
+    static const uint16_t alt_idx[]     = { 38, 39, 40, 41, 42, 43, 44, 45 };
 
     led_group_t power, spare, heartbeat, status, error;
     led_group_t spot_f, spot_b, comet_f, comet_b;
+    led_group_t alternate;
 
     /* Groups printed as one labelled segment each. */
     struct { const char *name; uint16_t first, len; } segs[] = {
@@ -87,6 +90,7 @@ int main(void)
         { "SPOT_BWD",   14, 8 },
         { "COMET_FWD",  22, 8 },
         { "COMET_BWD",  30, 8 },
+        { "ALTERNATE",  38, 8 },
     };
     const size_t seg_count = sizeof segs / sizeof segs[0];
 
@@ -102,6 +106,7 @@ int main(void)
     led_group_init(&spot_b,    &strip, spot_b_idx,  8);
     led_group_init(&comet_f,   &strip, comet_f_idx, 8);
     led_group_init(&comet_b,   &strip, comet_b_idx, 8);
+    led_group_init(&alternate, &strip, alt_idx,     8);
 
     /* LED_GROUP_ON - solid color, the simplest state. Needs only a color. */
     led_group_set_color(&power, COLOR_READY);
@@ -166,6 +171,15 @@ int main(void)
     led_group_set_period_ticks(&comet_b, 80);
     led_group_set_state(&comet_b, LED_GROUP_COMET_BACKWARD);
 
+    /* LED_GROUP_ALTERNATE - blocks of two colors, red red white white...,
+     * that swap places every half period. It borrows set_spot: the size is
+     * the block length and the "ambient" is the second color. Like BLINK,
+     * it phases off the shared counter. */
+    led_group_set_color(&alternate, COLOR_ERROR);
+    led_group_set_spot(&alternate, 2, COLOR_WHITE);
+    led_group_set_period_ticks(&alternate, 16);
+    led_group_set_state(&alternate, LED_GROUP_ALTERNATE);
+
     /* get_state reads back what was set - handy for "am I already showing
      * an error?" checks in application code. */
     printf("error group state = %d (LED_GROUP_BLINK_CODE = %d)\n\n",
@@ -194,6 +208,7 @@ int main(void)
         led_group_update(&spot_b);
         led_group_update(&comet_f);
         led_group_update(&comet_b);
+        led_group_update(&alternate);
 
         /* Where a real driver would push the buffer to the strip. */
         if (tick % 4 == 0) {
